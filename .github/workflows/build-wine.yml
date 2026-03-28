@@ -138,8 +138,13 @@ jobs:
       - name: Create Android x86_64 stubs for X11 libraries
         # Box64 wraps libX11/libXext at runtime from imagefs — we just need
         # stubs for link-time symbol resolution during Wine build.
+        # We copy only X11/ headers to /opt/android-x11-stubs/include/ so that
+        # --x-includes points there instead of /usr/include, preventing Ubuntu
+        # glibc headers (features-time64.h, bits/wordsize.h, etc.) from polluting
+        # the Android NDK compiler's include path.
         run: |
-          mkdir -p /opt/android-x11-stubs
+          mkdir -p /opt/android-x11-stubs/include
+          cp -r /usr/include/X11 /opt/android-x11-stubs/include/
           NDK_CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${API_LEVEL}-clang"
 
           python3 << 'PYEOF'
@@ -279,7 +284,7 @@ jobs:
             --with-wine-tools=/opt/wine-host \
             --enable-win64 \
             --with-x \
-            --x-includes=/usr/include \
+            --x-includes=/opt/android-x11-stubs/include \
             --x-libraries=/opt/android-x11-stubs \
             --without-xcomposite \
             --without-xfixes \
@@ -522,8 +527,11 @@ jobs:
       - name: Create Android aarch64 stubs for X11 libraries
         # imagefs provides native ARM64 libX11/libXext at runtime.
         # Create stubs from host X11 symbols for build-time linking.
+        # Only copy X11/ headers (not all of /usr/include) to avoid Ubuntu glibc
+        # header contamination when building with Android NDK clang.
         run: |
-          mkdir -p /opt/android-x11-stubs-arm64
+          mkdir -p /opt/android-x11-stubs-arm64/include
+          cp -r /usr/include/X11 /opt/android-x11-stubs-arm64/include/
           NDK_CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API_LEVEL}-clang"
 
           python3 << 'PYEOF'
@@ -640,7 +648,7 @@ jobs:
             --with-wine-tools=/opt/wine-host \
             --enable-win64 \
             --with-x \
-            --x-includes=/usr/include \
+            --x-includes=/opt/android-x11-stubs-arm64/include \
             --x-libraries=/opt/android-x11-stubs-arm64 \
             --without-xcomposite \
             --without-xfixes \
