@@ -111,6 +111,10 @@ jobs:
           name: wine-host-tools
           path: /opt/wine-host
 
+      - name: Fix host tools permissions
+        # Artifacts don't preserve execute bits — restore them
+        run: chmod -R +x /opt/wine-host/tools
+
       - name: Set up Android NDK toolchain (x86_64)
         run: |
           TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
@@ -248,6 +252,10 @@ jobs:
         with:
           name: wine-host-tools
           path: /opt/wine-host
+
+      - name: Fix host tools permissions
+        # Artifacts don't preserve execute bits — restore them
+        run: chmod -R +x /opt/wine-host/tools
 
       - name: Set up Android NDK toolchain (aarch64)
         run: |
