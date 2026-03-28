@@ -155,32 +155,47 @@ jobs:
       - name: Patch Wine source for Android NDK compilation
         run: |
           python3 << 'PYEOF'
-          import re, os
+          import re, glob, os
+
           ver = os.environ.get('WINE_VERSION', '11.0')
+          drv = f'wine-{ver}/dlls/wineandroid.drv'
 
-          # --- window.c: ANDROID_WindowPosChanged has extra BOOL show_flags parameter
-          # that doesn't match wine/gdi_driver.h struct declaration (conflicting types)
-          wc = f'wine-{ver}/dlls/wineandroid.drv/window.c'
-          content = open(wc).read()
-          lines_around_1059 = content.split('\n')[1054:1065]
-          print('window.c lines 1055-1065:')
-          for i, l in enumerate(lines_around_1059, 1055): print(f'  {i}: {l}')
-          patched = re.sub(r',\s*BOOL\s+show_flags\b', '', content)
-          if patched != content:
-              open(wc, 'w').write(patched)
-              print('OK: removed BOOL show_flags from window.c')
+          # --- Find ALL files referencing WindowPosChanged ---
+          print('=== WindowPosChanged references ===')
+          for f in sorted(glob.glob(f'{drv}/*')):
+              try:
+                  c = open(f).read()
+                  for i, l in enumerate(c.split('\n')):
+                      if 'WindowPosChanged' in l:
+                          print(f'{f}:{i+1}: {l}')
+              except: pass
+
+          # --- Patch ALL driver files: remove BOOL show_flags from WindowPosChanged ---
+          # The definition in window.c is WITHOUT BOOL, but a header somewhere
+          # declares it WITH BOOL causing "conflicting types" at the definition site.
+          for f in sorted(glob.glob(f'{drv}/*')):
+              try:
+                  c = open(f).read()
+                  if 'WindowPosChanged' not in c: continue
+                  p = re.sub(r',\s*BOOL\s+show_flags\b', '', c)   # remove param after comma
+                  p = re.sub(r'\bBOOL\s+show_flags\s*,\s*', '', p)  # remove param before comma
+                  if p != c:
+                      open(f, 'w').write(p)
+                      print(f'Patched {f}: removed BOOL show_flags')
+              except Exception as e:
+                  print(f'Error {f}: {e}')
+
+          # --- dllmain.c: cast function pointer to UINT64 ---
+          # params.start_device_callback is UINT64 but android_start_device is a fn ptr
+          dc = f'{drv}/dllmain.c'
+          c = open(dc).read()
+          p = re.sub(r'=\s*android_start_device\s*;',
+                     '= (UINT64)(ULONG_PTR)android_start_device;', c)
+          if p != c:
+              open(dc, 'w').write(p)
+              print('Patched dllmain.c: cast android_start_device to UINT64')
           else:
-              print('WARNING: BOOL show_flags not found — trying broader match')
-              patched = re.sub(r'BOOL\s+show_flags,\s*', '', content)
-              if patched != content:
-                  open(wc, 'w').write(patched)
-                  print('OK: removed BOOL show_flags, from window.c (broader)')
-
-          # --- dllmain.c line 126: print it for debug
-          dc = f'wine-{ver}/dlls/wineandroid.drv/dllmain.c'
-          lines = open(dc).read().split('\n')
-          print('dllmain.c lines 123-130:')
-          for i, l in enumerate(lines[122:130], 123): print(f'  {i}: {l}')
+              print('WARNING: android_start_device pattern not found in dllmain.c')
           PYEOF
 
       - name: Configure Wine (x64 Android)
