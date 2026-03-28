@@ -679,6 +679,8 @@ jobs:
   upload-release:
     runs-on: ubuntu-24.04
     needs: [build-x64, build-arm64x]
+    permissions:
+      contents: write
     if: |
       always() &&
       inputs.upload_release == true &&
