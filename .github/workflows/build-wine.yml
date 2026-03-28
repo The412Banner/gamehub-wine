@@ -202,6 +202,16 @@ jobs:
               print('Patched dllmain.c: cast android_start_device to UINT64')
           else:
               print('WARNING: android_start_device pattern not found in dllmain.c')
+
+          # --- Remove wine-debug.apk from build (Gradle/jcenter broken, not needed) ---
+          mfin = f'{drv}/Makefile.in'
+          c = open(mfin).read()
+          p = re.sub(r'\bwine-debug\.apk\b', '', c)
+          if p != c:
+              open(mfin, 'w').write(p)
+              print('Patched Makefile.in: removed wine-debug.apk from build targets')
+          else:
+              print('wine-debug.apk not found in Makefile.in (OK)')
           PYEOF
 
       - name: Configure Wine (x64 Android)
@@ -390,6 +400,16 @@ jobs:
               print('Patched dllmain.c: cast android_start_device to UINT64')
           else:
               print('WARNING: android_start_device pattern not found in dllmain.c')
+
+          # --- Remove wine-debug.apk from build (Gradle/jcenter broken, not needed) ---
+          mfin = f'{drv}/Makefile.in'
+          c = open(mfin).read()
+          p = re.sub(r'\bwine-debug\.apk\b', '', c)
+          if p != c:
+              open(mfin, 'w').write(p)
+              print('Patched Makefile.in: removed wine-debug.apk from build targets')
+          else:
+              print('wine-debug.apk not found in Makefile.in (OK)')
           PYEOF
 
       - name: Configure Wine (arm64x Android)
