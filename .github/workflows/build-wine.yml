@@ -140,7 +140,8 @@ jobs:
             RANLIB="$RANLIB"
           make -j$(nproc)
           sudo make install
-          echo "PKG_CONFIG_LIBDIR=/opt/freetype-x64/lib/pkgconfig" >> $GITHUB_ENV
+          echo "FREETYPE_CFLAGS=-I/opt/freetype-x64/include/freetype2" >> $GITHUB_ENV
+          echo "FREETYPE_LIBS=-L/opt/freetype-x64/lib -lfreetype" >> $GITHUB_ENV
 
       - name: Configure Wine (x64 Android)
         run: |
@@ -179,7 +180,9 @@ jobs:
             AR="$AR" \
             RANLIB="$RANLIB" \
             CROSSCC="x86_64-w64-mingw32-gcc" \
-            CROSSCXX="x86_64-w64-mingw32-g++"
+            CROSSCXX="x86_64-w64-mingw32-g++" \
+            FREETYPE_CFLAGS="$FREETYPE_CFLAGS" \
+            FREETYPE_LIBS="$FREETYPE_LIBS"
 
       - name: Build Wine (x64)
         run: |
@@ -275,7 +278,8 @@ jobs:
             RANLIB="$RANLIB"
           make -j$(nproc)
           sudo make install
-          echo "PKG_CONFIG_LIBDIR=/opt/freetype-arm64/lib/pkgconfig" >> $GITHUB_ENV
+          echo "FREETYPE_CFLAGS=-I/opt/freetype-arm64/include/freetype2" >> $GITHUB_ENV
+          echo "FREETYPE_LIBS=-L/opt/freetype-arm64/lib -lfreetype" >> $GITHUB_ENV
 
       - name: Configure Wine (arm64x Android)
         run: |
@@ -314,7 +318,9 @@ jobs:
             AR="$AR" \
             RANLIB="$RANLIB" \
             CROSSCC="aarch64-w64-mingw32-clang" \
-            CROSSCXX="aarch64-w64-mingw32-clang++"
+            CROSSCXX="aarch64-w64-mingw32-clang++" \
+            FREETYPE_CFLAGS="$FREETYPE_CFLAGS" \
+            FREETYPE_LIBS="$FREETYPE_LIBS"
 
       - name: Build Wine (arm64x)
         run: |
