@@ -52,7 +52,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build-host
-          key: wine-host-tools-${{ env.WINE_VERSION }}-v6
+          key: wine-host-tools-${{ env.WINE_VERSION }}-v7
 
       - name: Download Wine source
         if: steps.cache-tools.outputs.cache-hit != 'true'
@@ -68,7 +68,6 @@ jobs:
           ../wine-${WINE_VERSION}/configure \
             --enable-win64 \
             --without-x \
-            --without-freetype \
             --disable-tests
           make -j$(nproc) __tooldeps__
           # Copy locale.nls from Wine source — it's pre-generated in the tarball.
