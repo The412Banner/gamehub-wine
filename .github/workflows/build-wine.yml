@@ -27,6 +27,8 @@ env:
   NDK: /usr/local/lib/android/sdk/ndk/27.3.13750724
   API_LEVEL: 28
   FREETYPE_VERSION: 2.13.3
+  # wine_10.0 sub_data used as prefix template (has registry hives + symlinks)
+  WINE10_SUB_URL: https://github.com/The412Banner/bannerhub-api/releases/download/Components/66e25e9a8fde74e8feb4e3b2ba9f6201.tzst
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
@@ -52,7 +54,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build-host
-          key: wine-host-tools-${{ env.WINE_VERSION }}-v7
+          key: wine-host-tools-${{ env.WINE_VERSION }}-v8
 
       - name: Download Wine source
         if: steps.cache-tools.outputs.cache-hit != 'true'
@@ -86,6 +88,7 @@ jobs:
 
   # ──────────────────────────────────────────────────────────────────────────
   # Build X64: x86_64-linux-android (runs via Box64/FEX on device)
+  # Uses X11 backend (winex11.so) — Box64 wraps libX11 from imagefs at runtime
   # ──────────────────────────────────────────────────────────────────────────
   build-x64:
     runs-on: ubuntu-24.04
@@ -103,6 +106,7 @@ jobs:
             flex bison gettext make pkg-config libtool \
             gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
             mingw-w64-tools \
+            libx11-dev libxext-dev \
             zstd
 
       - name: Download Wine source
@@ -131,6 +135,97 @@ jobs:
           echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
           $TOOLCHAIN/bin/x86_64-linux-android${API_LEVEL}-clang --version
 
+      - name: Create Android x86_64 stubs for X11 libraries
+        # Box64 wraps libX11/libXext at runtime from imagefs — we just need
+        # stubs for link-time symbol resolution during Wine build.
+        run: |
+          mkdir -p /opt/android-x11-stubs
+          NDK_CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${API_LEVEL}-clang"
+
+          python3 << 'PYEOF'
+          import subprocess, os, glob
+
+          ndk_cc = os.environ['NDK'] + f'/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android{os.environ["API_LEVEL"]}-clang'
+
+          def make_stub(host_lib_pattern, soname, out_path):
+              # Find host library
+              candidates = glob.glob(host_lib_pattern)
+              host_lib = None
+              for c in candidates:
+                  if os.path.exists(c):
+                      host_lib = c
+                      break
+              if not host_lib:
+                  print(f'WARNING: host lib not found for {soname}, creating minimal stub')
+                  symbols = ['XOpenDisplay']
+              else:
+                  result = subprocess.run(['nm', '-D', '--defined-only', host_lib],
+                                        capture_output=True, text=True)
+                  symbols = set()
+                  for line in result.stdout.split('\n'):
+                      parts = line.strip().split()
+                      if len(parts) >= 3 and parts[-2] in ('T', 'W'):
+                          sym = parts[-1]
+                          # Keep only C symbols (no C++ mangling)
+                          if not sym.startswith('_ZN') and not sym.startswith('_Z'):
+                              symbols.add(sym)
+                  print(f'Found {len(symbols)} symbols in {host_lib}')
+
+              # Generate assembly stub (avoids C type issues)
+              stub_s = f'/tmp/stub_{soname}.s'
+              with open(stub_s, 'w') as f:
+                  for sym in sorted(symbols):
+                      f.write(f'.global {sym}\n')
+                      f.write(f'.type {sym}, @function\n')
+                      f.write(f'{sym}:\n')
+                      f.write(f'  ret\n\n')
+
+              result = subprocess.run([ndk_cc, '-shared', '-fPIC',
+                                      f'-Wl,-soname,{soname}',
+                                      '-o', out_path, stub_s],
+                                     capture_output=True, text=True)
+              if result.returncode == 0:
+                  print(f'Created {out_path}: {os.path.getsize(out_path)} bytes')
+              else:
+                  print(f'ERROR: {result.stderr[:300]}')
+                  raise RuntimeError(f'Failed to create stub for {soname}')
+
+          make_stub('/usr/lib/x86_64-linux-gnu/libX11.so*',
+                    'libX11.so', '/opt/android-x11-stubs/libX11.so')
+          make_stub('/usr/lib/x86_64-linux-gnu/libXext.so*',
+                    'libXext.so', '/opt/android-x11-stubs/libXext.so')
+          PYEOF
+
+          # Create pkg-config files for Wine configure
+          mkdir -p /opt/android-x11-stubs/pkgconfig
+          cat > /opt/android-x11-stubs/pkgconfig/x11.pc << 'EOF'
+prefix=/opt/android-x11-stubs
+exec_prefix=${prefix}
+libdir=${exec_prefix}
+includedir=/usr/include
+
+Name: X11
+Description: X Library stub for Android NDK cross-compilation
+Version: 1.8.0
+Libs: -L${libdir} -lX11
+Cflags: -I${includedir}
+EOF
+          cat > /opt/android-x11-stubs/pkgconfig/xext.pc << 'EOF'
+prefix=/opt/android-x11-stubs
+exec_prefix=${prefix}
+libdir=${exec_prefix}
+includedir=/usr/include
+
+Name: Xext
+Description: Misc X Extension Library stub for Android NDK cross-compilation
+Version: 1.3.5
+Requires: x11
+Libs: -L${libdir} -lXext
+Cflags: -I${includedir}
+EOF
+          echo "X11 stubs created:"
+          ls -la /opt/android-x11-stubs/
+
       - name: Build FreeType for Android x86_64
         run: |
           wget -q "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.xz" || \
@@ -157,68 +252,13 @@ jobs:
       - name: Patch Wine source for Android NDK compilation
         run: |
           python3 << 'PYEOF'
-          import re, glob, os
+          import re, os
 
-          ver = os.environ.get('WINE_VERSION', '11.0')
-          drv = f'wine-{ver}/dlls/wineandroid.drv'
-
-          # --- Find ALL files referencing WindowPosChanged ---
-          print('=== WindowPosChanged references ===')
-          for f in sorted(glob.glob(f'{drv}/*')):
-              try:
-                  c = open(f).read()
-                  for i, l in enumerate(c.split('\n')):
-                      if 'WindowPosChanged' in l:
-                          print(f'{f}:{i+1}: {l}')
-              except: pass
-
-          # --- Patch android.h: remove BOOL fullscreen from ANDROID_WindowPosChanged ---
-          # android.h:98 declares it WITH BOOL fullscreen, window.c:1059 defines it
-          # WITHOUT BOOL — remove from the declaration to match the definition.
-          for f in sorted(glob.glob(f'{drv}/*')):
-              try:
-                  c = open(f).read()
-                  if 'WindowPosChanged' not in c: continue
-                  # Remove BOOL <anyname> param (handles fullscreen, show_flags, etc.)
-                  p = re.sub(
-                      r'(ANDROID_WindowPosChanged\([^)]*UINT\s+swp_flags)\s*,\s*BOOL\s+\w+\b',
-                      r'\1',
-                      c, flags=re.DOTALL
-                  )
-                  if p != c:
-                      open(f, 'w').write(p)
-                      print(f'Patched {f}: removed BOOL param from WindowPosChanged')
-                  else:
-                      print(f'No BOOL param to remove in {f}')
-              except Exception as e:
-                  print(f'Error {f}: {e}')
-
-          # --- dllmain.c: cast function pointer to UINT64 ---
-          # params.start_device_callback is UINT64 but android_start_device is a fn ptr
-          dc = f'{drv}/dllmain.c'
-          c = open(dc).read()
-          p = re.sub(r'=\s*android_start_device\s*;',
-                     '= (UINT64)(ULONG_PTR)android_start_device;', c)
-          if p != c:
-              open(dc, 'w').write(p)
-              print('Patched dllmain.c: cast android_start_device to UINT64')
-          else:
-              print('WARNING: android_start_device pattern not found in dllmain.c')
-
-          # --- Remove wine-debug.apk from build (Gradle/jcenter broken, not needed) ---
-          mfin = f'{drv}/Makefile.in'
-          c = open(mfin).read()
-          p = re.sub(r'\bwine-debug\.apk\b', '', c)
-          if p != c:
-              open(mfin, 'w').write(p)
-              print('Patched Makefile.in: removed wine-debug.apk from build targets')
-          else:
-              print('wine-debug.apk not found in Makefile.in (OK)')
+          ver_local = os.environ.get('WINE_VERSION', '11.0')
 
           # --- server/thread.c: add sched.h for cpu_set_t ---
           # Android NDK configure detection doesn't find sched.h during cross-compile,
           # so cpu_set_t / CPU_ZERO / CPU_SET are undeclared.
-          ver_local = os.environ.get('WINE_VERSION', '11.0')
           tc = f'wine-{ver_local}/server/thread.c'
           try:
               c = open(tc).read()
@@ -235,14 +275,15 @@ jobs:
               print(f'Error patching server/thread.c: {e}')
           PYEOF
 
-      - name: Configure Wine (x64 Android)
+      - name: Configure Wine (x64 Android — X11 backend)
         run: |
           mkdir build-x64 && cd build-x64
+          PKG_CONFIG_LIBDIR=/opt/android-x11-stubs/pkgconfig \
           ../wine-${WINE_VERSION}/configure \
             --host=x86_64-linux-android \
             --with-wine-tools=/opt/wine-host \
             --enable-win64 \
-            --without-x \
+            --with-x \
             --without-xcomposite \
             --without-xfixes \
             --without-xinerama \
@@ -276,46 +317,27 @@ jobs:
             FREETYPE_CFLAGS="$FREETYPE_CFLAGS" \
             FREETYPE_LIBS="$FREETYPE_LIBS" \
             CFLAGS="-D_GNU_SOURCE -include strings.h -Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion" \
-            CROSSCFLAGS="-Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion"
+            CROSSCFLAGS="-Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion" \
+            LDFLAGS="-L/opt/android-x11-stubs -Wl,--allow-shlib-undefined"
 
       - name: Patch generated Makefile (x64)
         run: |
-          # wineandroid.drv links with -Wl,-z,defs which requires all symbols resolved
-          # at link time. But java.c symbols (drawable_mutex, set_window_opengl_drawable)
-          # are provided at runtime by GameHub's libwinemu.so. Remove -z,defs so the
-          # linker accepts unresolved symbols (Android dynamic linker resolves at load time).
-          # The rule is in the top-level Makefile (not subdirectory Makefile).
+          # winex11.so (and other unix-side .so files) may have symbols from libX11/libXext
+          # that are unresolved at link time (provided by Box64/imagefs at runtime).
+          # Remove -Wl,-z,defs globally from the generated Makefile to allow undefined symbols.
           python3 << 'PYEOF'
-          import re
           mf = 'build-x64/Makefile'
           c = open(mf).read()
-          # Find wineandroid.so link rule and remove -Wl,-z,defs from it specifically
-          # The rule is: target: wineandroid.so ... -Wl,-z,defs ...
-          p = re.sub(
-              r'(dlls/wineandroid\.drv/wineandroid\.so[^\n]*\n(?:[^\n]*\n)*?.*?)-Wl,-z,defs',
-              r'\1',
-              c, flags=re.MULTILINE
-          )
-          if p != c:
-              open(mf, 'w').write(p)
-              print('Patched build-x64/Makefile: removed -z,defs from wineandroid.so link')
+          orig = c
+          # Remove all occurrences of -Wl,-z,defs
+          import re
+          c = re.sub(r'\s*-Wl,-z,defs\b', '', c)
+          if c != orig:
+              open(mf, 'w').write(c)
+              count = orig.count('-Wl,-z,defs')
+              print(f'Patched build-x64/Makefile: removed {count} occurrence(s) of -Wl,-z,defs')
           else:
-              # Fallback: remove ALL -Wl,-z,defs occurrences in wineandroid context
-              p2 = c.replace('-Wl,-z,defs', '', 1)  # remove first occurrence only if in wineandroid section
-              # More targeted: find line with wineandroid.so and -z,defs
-              lines = c.split('\n')
-              changed = False
-              for i, line in enumerate(lines):
-                  if 'wineandroid.so' in line or ('wineandroid' in ''.join(lines[max(0,i-5):i]) and '-z,defs' in line):
-                      if '-z,defs' in line:
-                          lines[i] = line.replace('-Wl,-z,defs', '').replace('  ', ' ')
-                          changed = True
-                          print(f'Removed -z,defs from line {i+1}: {lines[i][:80]}')
-              if changed:
-                  open(mf, 'w').write('\n'.join(lines))
-                  print('Patched build-x64/Makefile: removed -z,defs from wineandroid.so link')
-              else:
-                  print('WARNING: could not find -z,defs in wineandroid.so link rule')
+              print('No -Wl,-z,defs found in build-x64/Makefile (OK)')
           PYEOF
 
       - name: Build Wine (x64)
@@ -336,6 +358,8 @@ jobs:
           ls -la build-x64/loader/ 2>/dev/null | head -30 || echo "loader dir missing"
           echo "=== build-x64/server contents ==="
           ls -la build-x64/server/ 2>/dev/null | head -10 || echo "server dir missing"
+          echo "=== x86_64-unix libs ==="
+          ls /tmp/wine-x64-out/x86_64/lib/wine/x86_64-unix/ 2>/dev/null | head -10 || echo "missing"
 
           # Wine Android NDK cross-compile does NOT install loader/wine via make install.
           # Copy the executables manually from the build directory.
@@ -371,9 +395,63 @@ jobs:
 
           echo "=== $X64_SRC/bin ==="
           ls -la "$X64_SRC/bin/" 2>/dev/null || echo "(no bin dir)"
+          echo "=== unix-side .so files ==="
+          ls "$X64_SRC/lib/wine/x86_64-unix/" 2>/dev/null | grep "\.so$" | head -10
 
           chmod +x scripts/package_container.sh
           ./scripts/package_container.sh x64 "$X64_SRC" wine_${WINE_VERSION}
+
+      - name: Generate proper Wine prefix (sub_data) from wine_10.0 template
+        # wine_10.0's sub_data has registry hives + symlinks needed for container init.
+        # We reuse it, removing any symlinks to i386-windows (Wine 11 has no 32-bit).
+        run: |
+          WINE_VER="${WINE_VERSION}"
+          MAIN_MD5=$(md5sum "wine_${WINE_VER}.tar.zst" | cut -d' ' -f1)
+          OLD_SUB="${MAIN_MD5}.tzst"
+
+          echo "Downloading wine_10.0 prefix template..."
+          wget -q -O /tmp/wine10_sub.tzst "$WINE10_SUB_URL"
+
+          echo "Processing prefix — removing i386-windows symlinks..."
+          mkdir -p /tmp/prefix_work
+          cd /tmp/prefix_work
+          zstd -d -c /tmp/wine10_sub.tzst | tar -x
+
+          # Remove symlinks targeting i386-windows (Wine 11 has no 32-bit DLLs)
+          find . -type l | while IFS= read -r link; do
+            target=$(readlink "$link")
+            if echo "$target" | grep -q "i386-windows"; then
+              echo "  Removing: $link -> $target"
+              rm "$link"
+            fi
+          done
+
+          echo "Repacking prefix..."
+          tar --use-compress-program="zstd -19 -T0" -cf "/tmp/${OLD_SUB}" wine/
+          cd -
+          mv "/tmp/${OLD_SUB}" "./${OLD_SUB}"
+
+          NEW_SUB_MD5=$(md5sum "./${OLD_SUB}" | cut -d' ' -f1)
+          NEW_SUB_SIZE=$(stat -c%s "./${OLD_SUB}")
+          echo "New sub_data: ${OLD_SUB} (${NEW_SUB_SIZE} bytes, md5=${NEW_SUB_MD5})"
+
+          # Update containers_entry JSON with correct sub_data info
+          python3 << PYEOF
+          import json, glob
+
+          for entry_file in glob.glob('./containers_entry_wine_*.json'):
+              with open(entry_file) as f:
+                  entry = json.load(f)
+              entry['sub_data']['sub_file_name'] = '${OLD_SUB}'
+              entry['sub_data']['sub_download_url'] = 'https://github.com/The412Banner/gamehub-wine/releases/download/Containers/${OLD_SUB}'
+              entry['sub_data']['sub_file_md5'] = '${NEW_SUB_MD5}'
+              with open(entry_file, 'w') as f:
+                  json.dump(entry, f, indent=2)
+              print(f'Updated {entry_file}')
+          PYEOF
+
+          echo "=== Updated containers_entry ==="
+          cat containers_entry_wine_${WINE_VER}.json
 
       - name: Upload container artifacts
         uses: actions/upload-artifact@v4
@@ -387,6 +465,7 @@ jobs:
 
   # ──────────────────────────────────────────────────────────────────────────
   # Build arm64X: aarch64-linux-android (native ARM64 — no emulation)
+  # Uses X11 backend (winex11.so) — imagefs provides native ARM64 libX11
   # Uses llvm-mingw for aarch64-w64-mingw32 cross-compiler (not in Ubuntu apt)
   # ──────────────────────────────────────────────────────────────────────────
   build-arm64x:
@@ -405,6 +484,7 @@ jobs:
             flex bison gettext make pkg-config libtool \
             gcc-mingw-w64-i686 \
             mingw-w64-tools \
+            libx11-dev libxext-dev \
             zstd
 
       - name: Install llvm-mingw (provides aarch64-w64-mingw32 cross-compiler)
@@ -440,6 +520,94 @@ jobs:
           echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
           $TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang --version
 
+      - name: Create Android aarch64 stubs for X11 libraries
+        # imagefs provides native ARM64 libX11/libXext at runtime.
+        # Create stubs from host X11 symbols for build-time linking.
+        run: |
+          mkdir -p /opt/android-x11-stubs-arm64
+          NDK_CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API_LEVEL}-clang"
+
+          python3 << 'PYEOF'
+          import subprocess, os, glob
+
+          ndk_cc = os.environ['NDK'] + f'/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android{os.environ["API_LEVEL"]}-clang'
+
+          def make_stub(host_lib_pattern, soname, out_path):
+              candidates = glob.glob(host_lib_pattern)
+              host_lib = None
+              for c in candidates:
+                  if os.path.exists(c):
+                      host_lib = c
+                      break
+              if not host_lib:
+                  print(f'WARNING: host lib not found for {soname}, creating minimal stub')
+                  symbols = ['XOpenDisplay']
+              else:
+                  result = subprocess.run(['nm', '-D', '--defined-only', host_lib],
+                                        capture_output=True, text=True)
+                  symbols = set()
+                  for line in result.stdout.split('\n'):
+                      parts = line.strip().split()
+                      if len(parts) >= 3 and parts[-2] in ('T', 'W'):
+                          sym = parts[-1]
+                          if not sym.startswith('_Z'):
+                              symbols.add(sym)
+                  print(f'Found {len(symbols)} symbols in {host_lib}')
+
+              stub_s = f'/tmp/stub_arm64_{soname}.s'
+              with open(stub_s, 'w') as f:
+                  for sym in sorted(symbols):
+                      f.write(f'.global {sym}\n')
+                      f.write(f'.type {sym}, %function\n')
+                      f.write(f'{sym}:\n')
+                      f.write(f'  ret\n\n')
+
+              result = subprocess.run([ndk_cc, '-shared', '-fPIC',
+                                      f'-Wl,-soname,{soname}',
+                                      '-o', out_path, stub_s],
+                                     capture_output=True, text=True)
+              if result.returncode == 0:
+                  print(f'Created {out_path}: {os.path.getsize(out_path)} bytes')
+              else:
+                  print(f'ERROR: {result.stderr[:300]}')
+                  raise RuntimeError(f'Failed to create stub for {soname}')
+
+          make_stub('/usr/lib/x86_64-linux-gnu/libX11.so*',
+                    'libX11.so', '/opt/android-x11-stubs-arm64/libX11.so')
+          make_stub('/usr/lib/x86_64-linux-gnu/libXext.so*',
+                    'libXext.so', '/opt/android-x11-stubs-arm64/libXext.so')
+          PYEOF
+
+          # Create pkg-config files
+          mkdir -p /opt/android-x11-stubs-arm64/pkgconfig
+          cat > /opt/android-x11-stubs-arm64/pkgconfig/x11.pc << 'EOF'
+prefix=/opt/android-x11-stubs-arm64
+exec_prefix=${prefix}
+libdir=${exec_prefix}
+includedir=/usr/include
+
+Name: X11
+Description: X Library stub for Android NDK cross-compilation
+Version: 1.8.0
+Libs: -L${libdir} -lX11
+Cflags: -I${includedir}
+EOF
+          cat > /opt/android-x11-stubs-arm64/pkgconfig/xext.pc << 'EOF'
+prefix=/opt/android-x11-stubs-arm64
+exec_prefix=${prefix}
+libdir=${exec_prefix}
+includedir=/usr/include
+
+Name: Xext
+Description: Misc X Extension Library stub for Android NDK cross-compilation
+Version: 1.3.5
+Requires: x11
+Libs: -L${libdir} -lXext
+Cflags: -I${includedir}
+EOF
+          echo "ARM64 X11 stubs created:"
+          ls -la /opt/android-x11-stubs-arm64/
+
       - name: Build FreeType for Android aarch64
         run: |
           wget -q "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.xz" || \
@@ -466,55 +634,11 @@ jobs:
       - name: Patch Wine source for Android NDK compilation
         run: |
           python3 << 'PYEOF'
-          import re, glob, os
+          import re, os
 
-          ver = os.environ.get('WINE_VERSION', '11.0')
-          drv = f'wine-{ver}/dlls/wineandroid.drv'
-
-          # --- Patch android.h: remove BOOL fullscreen from ANDROID_WindowPosChanged ---
-          # android.h:98 declares it WITH BOOL fullscreen, window.c:1059 defines it
-          # WITHOUT BOOL — remove from the declaration to match the definition.
-          for f in sorted(glob.glob(f'{drv}/*')):
-              try:
-                  c = open(f).read()
-                  if 'WindowPosChanged' not in c: continue
-                  # Remove BOOL <anyname> param (handles fullscreen, show_flags, etc.)
-                  p = re.sub(
-                      r'(ANDROID_WindowPosChanged\([^)]*UINT\s+swp_flags)\s*,\s*BOOL\s+\w+\b',
-                      r'\1',
-                      c, flags=re.DOTALL
-                  )
-                  if p != c:
-                      open(f, 'w').write(p)
-                      print(f'Patched {f}: removed BOOL param from WindowPosChanged')
-                  else:
-                      print(f'No BOOL param to remove in {f}')
-              except Exception as e:
-                  print(f'Error {f}: {e}')
-
-          # --- dllmain.c: cast function pointer to UINT64 ---
-          dc = f'{drv}/dllmain.c'
-          c = open(dc).read()
-          p = re.sub(r'=\s*android_start_device\s*;',
-                     '= (UINT64)(ULONG_PTR)android_start_device;', c)
-          if p != c:
-              open(dc, 'w').write(p)
-              print('Patched dllmain.c: cast android_start_device to UINT64')
-          else:
-              print('WARNING: android_start_device pattern not found in dllmain.c')
-
-          # --- Remove wine-debug.apk from build (Gradle/jcenter broken, not needed) ---
-          mfin = f'{drv}/Makefile.in'
-          c = open(mfin).read()
-          p = re.sub(r'\bwine-debug\.apk\b', '', c)
-          if p != c:
-              open(mfin, 'w').write(p)
-              print('Patched Makefile.in: removed wine-debug.apk from build targets')
-          else:
-              print('wine-debug.apk not found in Makefile.in (OK)')
+          ver_local = os.environ.get('WINE_VERSION', '11.0')
 
           # --- server/thread.c: add sched.h for cpu_set_t ---
-          ver_local = os.environ.get('WINE_VERSION', '11.0')
           tc = f'wine-{ver_local}/server/thread.c'
           try:
               c = open(tc).read()
@@ -530,14 +654,15 @@ jobs:
               print(f'Error patching server/thread.c: {e}')
           PYEOF
 
-      - name: Configure Wine (arm64x Android)
+      - name: Configure Wine (arm64x Android — X11 backend)
         run: |
           mkdir build-arm64x && cd build-arm64x
+          PKG_CONFIG_LIBDIR=/opt/android-x11-stubs-arm64/pkgconfig \
           ../wine-${WINE_VERSION}/configure \
             --host=aarch64-linux-android \
             --with-wine-tools=/opt/wine-host \
             --enable-win64 \
-            --without-x \
+            --with-x \
             --without-xcomposite \
             --without-xfixes \
             --without-xinerama \
@@ -571,7 +696,8 @@ jobs:
             FREETYPE_CFLAGS="$FREETYPE_CFLAGS" \
             FREETYPE_LIBS="$FREETYPE_LIBS" \
             CFLAGS="-D_GNU_SOURCE -include strings.h -Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion" \
-            CROSSCFLAGS="-Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion"
+            CROSSCFLAGS="-Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion" \
+            LDFLAGS="-L/opt/android-x11-stubs-arm64 -Wl,--allow-shlib-undefined"
 
       - name: Patch generated Makefile (arm64x)
         run: |
@@ -579,19 +705,14 @@ jobs:
           import re
           mf = 'build-arm64x/Makefile'
           c = open(mf).read()
-          lines = c.split('\n')
-          changed = False
-          for i, line in enumerate(lines):
-              if 'wineandroid.so' in line or ('wineandroid' in ''.join(lines[max(0,i-5):i]) and '-z,defs' in line):
-                  if '-z,defs' in line:
-                      lines[i] = line.replace('-Wl,-z,defs', '').replace('  ', ' ')
-                      changed = True
-                      print(f'Removed -z,defs from line {i+1}')
-          if changed:
-              open(mf, 'w').write('\n'.join(lines))
-              print('Patched build-arm64x/Makefile: removed -z,defs from wineandroid.so link')
+          orig = c
+          c = re.sub(r'\s*-Wl,-z,defs\b', '', c)
+          if c != orig:
+              open(mf, 'w').write(c)
+              count = orig.count('-Wl,-z,defs')
+              print(f'Patched build-arm64x/Makefile: removed {count} occurrence(s) of -Wl,-z,defs')
           else:
-              print('WARNING: could not find -z,defs in wineandroid.so link rule')
+              print('No -Wl,-z,defs found in build-arm64x/Makefile (OK)')
           PYEOF
 
       - name: Build Wine (arm64x)
@@ -613,6 +734,8 @@ jobs:
           ls -la build-arm64x/loader/ 2>/dev/null | head -30 || echo "loader dir missing"
           echo "=== build-arm64x/server contents ==="
           ls -la build-arm64x/server/ 2>/dev/null | head -10 || echo "server dir missing"
+          echo "=== arm64-v8a unix-side libs ==="
+          ls /tmp/wine-arm64x-out/arm64-v8a/lib/wine/aarch64-unix/ 2>/dev/null | grep "\.so$" | head -10 || echo "missing"
 
           # Wine Android NDK cross-compile does NOT install loader/wine via make install.
           # Detect install layout and copy executables manually.
@@ -659,9 +782,61 @@ jobs:
 
           echo "=== $ARM_SRC/bin ==="
           ls -la "$ARM_SRC/bin/" 2>/dev/null || echo "(no bin dir)"
+          echo "=== aarch64-unix .so files ==="
+          ls "$ARM_SRC/lib/wine/aarch64-unix/" 2>/dev/null | grep "\.so$" | head -10
 
           chmod +x scripts/package_container.sh
           ./scripts/package_container.sh arm64x "$ARM_SRC" wine_${WINE_VERSION}_arm64x
+
+      - name: Generate proper Wine prefix (sub_data) from wine_10.0 template
+        run: |
+          WINE_VER="${WINE_VERSION}"
+          MAIN_MD5=$(md5sum "wine_${WINE_VER}_arm64x.tar.zst" | cut -d' ' -f1)
+          OLD_SUB="${MAIN_MD5}.tzst"
+
+          echo "Downloading wine_10.0 prefix template..."
+          wget -q -O /tmp/wine10_sub.tzst "$WINE10_SUB_URL"
+
+          echo "Processing prefix — removing i386-windows symlinks..."
+          mkdir -p /tmp/prefix_work_arm64
+          cd /tmp/prefix_work_arm64
+          zstd -d -c /tmp/wine10_sub.tzst | tar -x
+
+          # Remove symlinks targeting i386-windows (Wine 11 has no 32-bit DLLs)
+          find . -type l | while IFS= read -r link; do
+            target=$(readlink "$link")
+            if echo "$target" | grep -q "i386-windows"; then
+              echo "  Removing: $link -> $target"
+              rm "$link"
+            fi
+          done
+
+          echo "Repacking prefix..."
+          tar --use-compress-program="zstd -19 -T0" -cf "/tmp/${OLD_SUB}" wine/
+          cd -
+          mv "/tmp/${OLD_SUB}" "./${OLD_SUB}"
+
+          NEW_SUB_MD5=$(md5sum "./${OLD_SUB}" | cut -d' ' -f1)
+          NEW_SUB_SIZE=$(stat -c%s "./${OLD_SUB}")
+          echo "New sub_data: ${OLD_SUB} (${NEW_SUB_SIZE} bytes, md5=${NEW_SUB_MD5})"
+
+          # Update containers_entry JSON
+          python3 << PYEOF
+          import json, glob
+
+          for entry_file in glob.glob('./containers_entry_wine_*_arm64x.json'):
+              with open(entry_file) as f:
+                  entry = json.load(f)
+              entry['sub_data']['sub_file_name'] = '${OLD_SUB}'
+              entry['sub_data']['sub_download_url'] = 'https://github.com/The412Banner/gamehub-wine/releases/download/Containers/${OLD_SUB}'
+              entry['sub_data']['sub_file_md5'] = '${NEW_SUB_MD5}'
+              with open(entry_file, 'w') as f:
+                  json.dump(entry, f, indent=2)
+              print(f'Updated {entry_file}')
+          PYEOF
+
+          echo "=== Updated containers_entry ==="
+          cat containers_entry_wine_${WINE_VER}_arm64x.json
 
       - name: Upload container artifacts
         uses: actions/upload-artifact@v4
