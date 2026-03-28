@@ -252,6 +252,23 @@ jobs:
                   print('server/thread.c: sched.h already present or no cpu_set_t usage')
           except Exception as e:
               print(f'Error patching server/thread.c: {e}')
+
+          # --- wineandroid.drv/android.h: remove BOOL fullscreen parameter ---
+          # In Wine 11.0, window.c removed BOOL fullscreen from ANDROID_WindowPosChanged
+          # but android.h still declares it with that parameter, causing a conflicting
+          # types error. Remove it from the header to match the implementation.
+          ah = f'wine-{ver_local}/dlls/wineandroid.drv/android.h'
+          try:
+              c = open(ah).read()
+              orig = c
+              c = re.sub(r',\s*BOOL\s+fullscreen\b', '', c)
+              if c != orig:
+                  open(ah, 'w').write(c)
+                  print('Patched android.h: removed BOOL fullscreen parameter')
+              else:
+                  print('android.h: BOOL fullscreen not found (OK)')
+          except Exception as e:
+              print(f'Error patching android.h: {e}')
           PYEOF
 
       - name: Configure Wine (x64 Android — X11 backend)
@@ -305,19 +322,21 @@ jobs:
           # winex11.so (and other unix-side .so files) may have symbols from libX11/libXext
           # that are unresolved at link time (provided by Box64/imagefs at runtime).
           # Remove -Wl,-z,defs globally from the generated Makefile to allow undefined symbols.
+          # Also remove wine-debug.apk target — gradle/jcenter is broken (jcenter shutdown).
           python3 << 'PYEOF'
+          import re
           mf = 'build-x64/Makefile'
           c = open(mf).read()
           orig = c
-          # Remove all occurrences of -Wl,-z,defs
-          import re
+          # Remove -Wl,-z,defs
           c = re.sub(r'\s*-Wl,-z,defs\b', '', c)
+          # Remove wine-debug.apk as a dependency/target anywhere in Makefile
+          c = re.sub(r'\s*dlls/wineandroid\.drv/wine-debug\.apk\b', '', c)
           if c != orig:
               open(mf, 'w').write(c)
-              count = orig.count('-Wl,-z,defs')
-              print(f'Patched build-x64/Makefile: removed {count} occurrence(s) of -Wl,-z,defs')
+              print(f'Patched build-x64/Makefile: -Wl,-z,defs + wine-debug.apk removed')
           else:
-              print('No -Wl,-z,defs found in build-x64/Makefile (OK)')
+              print('build-x64/Makefile: nothing to patch (OK)')
           PYEOF
 
       - name: Build Wine (x64)
@@ -667,12 +686,12 @@ jobs:
           c = open(mf).read()
           orig = c
           c = re.sub(r'\s*-Wl,-z,defs\b', '', c)
+          c = re.sub(r'\s*dlls/wineandroid\.drv/wine-debug\.apk\b', '', c)
           if c != orig:
               open(mf, 'w').write(c)
-              count = orig.count('-Wl,-z,defs')
-              print(f'Patched build-arm64x/Makefile: removed {count} occurrence(s) of -Wl,-z,defs')
+              print(f'Patched build-arm64x/Makefile: -Wl,-z,defs + wine-debug.apk removed')
           else:
-              print('No -Wl,-z,defs found in build-arm64x/Makefile (OK)')
+              print('build-arm64x/Makefile: nothing to patch (OK)')
           PYEOF
 
       - name: Build Wine (arm64x)
