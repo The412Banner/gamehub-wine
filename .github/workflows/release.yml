@@ -1,0 +1,27 @@
+name: Upload Containers Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      container_files:
+        description: 'Space-separated list of container files to upload (e.g. wine_11.0.tar.zst abc123def.tzst)'
+        required: true
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Upload to Containers release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Ensure Containers release exists
+          gh release view Containers --repo ${{ github.repository }} 2>/dev/null || \
+            gh release create Containers \
+              --repo ${{ github.repository }} \
+              --title "Containers" \
+              --notes "Wine/Proton container files for GameHub/BannerHub" \
+              --prerelease
+
+          echo "Ready — upload files manually with:"
+          echo "gh release upload Containers <file> --repo ${{ github.repository }} --clobber"
