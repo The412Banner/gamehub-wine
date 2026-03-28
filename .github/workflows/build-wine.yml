@@ -26,11 +26,12 @@ env:
   WINE_VERSION: ${{ inputs.wine_version }}
   NDK: /usr/local/lib/android/sdk/ndk/27.3.13750724
   API_LEVEL: 28
+  FREETYPE_VERSION: 2.13.3
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
   # Build host Wine (native Linux) — provides wrc, widl, winebuild tools
-  # needed for cross-compilation. Cached by build directory (not install).
+  # needed for cross-compilation. Artifact is the build directory.
   # ──────────────────────────────────────────────────────────────────────────
   build-host-tools:
     runs-on: ubuntu-24.04
@@ -71,7 +72,7 @@ jobs:
           make -j$(nproc) __tooldeps__
 
       - name: Upload host tools artifact
-        # Upload the build directory — --with-wine-tools needs tools/widl/widl etc.
+        # Upload build-host/ directory — --with-wine-tools needs tools/widl/widl etc.
         uses: actions/upload-artifact@v4
         with:
           name: wine-host-tools
@@ -94,7 +95,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            flex bison gettext make pkg-config \
+            flex bison gettext make pkg-config libtool \
             gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
             mingw-w64-tools \
             zstd
@@ -120,6 +121,26 @@ jobs:
           echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib" >> $GITHUB_ENV
           echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
           $TOOLCHAIN/bin/x86_64-linux-android${API_LEVEL}-clang --version
+
+      - name: Build FreeType for Android x86_64
+        run: |
+          wget -q "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.xz"
+          tar xf "freetype-${FREETYPE_VERSION}.tar.xz"
+          mkdir freetype-build && cd freetype-build
+          ../freetype-${FREETYPE_VERSION}/configure \
+            --host=x86_64-linux-android \
+            --prefix=/opt/freetype-x64 \
+            --without-zlib \
+            --without-bzip2 \
+            --without-png \
+            --without-harfbuzz \
+            --without-brotli \
+            CC="$CC" \
+            AR="$AR" \
+            RANLIB="$RANLIB"
+          make -j$(nproc)
+          sudo make install
+          echo "PKG_CONFIG_LIBDIR=/opt/freetype-x64/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Configure Wine (x64 Android)
         run: |
@@ -202,7 +223,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            flex bison gettext make pkg-config \
+            flex bison gettext make pkg-config libtool \
             gcc-mingw-w64-i686 \
             mingw-w64-tools \
             zstd
@@ -235,6 +256,26 @@ jobs:
           echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib" >> $GITHUB_ENV
           echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
           $TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang --version
+
+      - name: Build FreeType for Android aarch64
+        run: |
+          wget -q "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.xz"
+          tar xf "freetype-${FREETYPE_VERSION}.tar.xz"
+          mkdir freetype-build && cd freetype-build
+          ../freetype-${FREETYPE_VERSION}/configure \
+            --host=aarch64-linux-android \
+            --prefix=/opt/freetype-arm64 \
+            --without-zlib \
+            --without-bzip2 \
+            --without-png \
+            --without-harfbuzz \
+            --without-brotli \
+            CC="$CC" \
+            AR="$AR" \
+            RANLIB="$RANLIB"
+          make -j$(nproc)
+          sudo make install
+          echo "PKG_CONFIG_LIBDIR=/opt/freetype-arm64/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Configure Wine (arm64x Android)
         run: |
