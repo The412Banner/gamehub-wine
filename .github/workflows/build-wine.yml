@@ -284,8 +284,39 @@ jobs:
           # at link time. But java.c symbols (drawable_mutex, set_window_opengl_drawable)
           # are provided at runtime by GameHub's libwinemu.so. Remove -z,defs so the
           # linker accepts unresolved symbols (Android dynamic linker resolves at load time).
-          sed -i 's/-Wl,-z,defs//' build-x64/dlls/wineandroid.drv/Makefile || true
-          echo "Patched build-x64/dlls/wineandroid.drv/Makefile: removed -z,defs"
+          # The rule is in the top-level Makefile (not subdirectory Makefile).
+          python3 << 'PYEOF'
+          import re
+          mf = 'build-x64/Makefile'
+          c = open(mf).read()
+          # Find wineandroid.so link rule and remove -Wl,-z,defs from it specifically
+          # The rule is: target: wineandroid.so ... -Wl,-z,defs ...
+          p = re.sub(
+              r'(dlls/wineandroid\.drv/wineandroid\.so[^\n]*\n(?:[^\n]*\n)*?.*?)-Wl,-z,defs',
+              r'\1',
+              c, flags=re.MULTILINE
+          )
+          if p != c:
+              open(mf, 'w').write(p)
+              print('Patched build-x64/Makefile: removed -z,defs from wineandroid.so link')
+          else:
+              # Fallback: remove ALL -Wl,-z,defs occurrences in wineandroid context
+              p2 = c.replace('-Wl,-z,defs', '', 1)  # remove first occurrence only if in wineandroid section
+              # More targeted: find line with wineandroid.so and -z,defs
+              lines = c.split('\n')
+              changed = False
+              for i, line in enumerate(lines):
+                  if 'wineandroid.so' in line or ('wineandroid' in ''.join(lines[max(0,i-5):i]) and '-z,defs' in line):
+                      if '-z,defs' in line:
+                          lines[i] = line.replace('-Wl,-z,defs', '').replace('  ', ' ')
+                          changed = True
+                          print(f'Removed -z,defs from line {i+1}: {lines[i][:80]}')
+              if changed:
+                  open(mf, 'w').write('\n'.join(lines))
+                  print('Patched build-x64/Makefile: removed -z,defs from wineandroid.so link')
+              else:
+                  print('WARNING: could not find -z,defs in wineandroid.so link rule')
+          PYEOF
 
       - name: Build Wine (x64)
         env:
@@ -505,8 +536,24 @@ jobs:
 
       - name: Patch generated Makefile (arm64x)
         run: |
-          sed -i 's/-Wl,-z,defs//' build-arm64x/dlls/wineandroid.drv/Makefile || true
-          echo "Patched build-arm64x/dlls/wineandroid.drv/Makefile: removed -z,defs"
+          python3 << 'PYEOF'
+          import re
+          mf = 'build-arm64x/Makefile'
+          c = open(mf).read()
+          lines = c.split('\n')
+          changed = False
+          for i, line in enumerate(lines):
+              if 'wineandroid.so' in line or ('wineandroid' in ''.join(lines[max(0,i-5):i]) and '-z,defs' in line):
+                  if '-z,defs' in line:
+                      lines[i] = line.replace('-Wl,-z,defs', '').replace('  ', ' ')
+                      changed = True
+                      print(f'Removed -z,defs from line {i+1}')
+          if changed:
+              open(mf, 'w').write('\n'.join(lines))
+              print('Patched build-arm64x/Makefile: removed -z,defs from wineandroid.so link')
+          else:
+              print('WARNING: could not find -z,defs in wineandroid.so link rule')
+          PYEOF
 
       - name: Build Wine (arm64x)
         env:
