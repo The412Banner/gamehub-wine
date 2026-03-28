@@ -329,12 +329,38 @@ jobs:
       - name: Install Wine (x64)
         run: |
           cd build-x64
-          sudo make install
+          sudo env PATH="$PATH" make install
 
       - name: Package as GameHub container
         run: |
+          # Wine Android NDK builds install under $prefix/<abi>/ subdirectory
+          # Check both layouts (standard and Android ABI)
+          echo "=== Wine x64 install tree ==="
+          find /opt/wine-x64-out -maxdepth 4 -name "wine" -o -name "wine64" 2>/dev/null | head -20 || true
+          ls /opt/wine-x64-out/ 2>/dev/null || echo "prefix dir missing"
+
+          if [[ -f /opt/wine-x64-out/bin/wine ]]; then
+            X64_SRC=/opt/wine-x64-out
+          elif [[ -f /opt/wine-x64-out/x86_64/bin/wine ]]; then
+            X64_SRC=/opt/wine-x64-out/x86_64
+            # bring share/ and include/ into the arch subdir so package_container.sh finds them
+            [[ -d /opt/wine-x64-out/share   ]] && cp -a /opt/wine-x64-out/share   "$X64_SRC/"
+            [[ -d /opt/wine-x64-out/include ]] && cp -a /opt/wine-x64-out/include "$X64_SRC/"
+          elif [[ -f /opt/wine-x64-out/x86_64/bin/wine64 ]]; then
+            # wine64 binary name instead of wine
+            X64_SRC=/opt/wine-x64-out/x86_64
+            ln -sf wine64 "$X64_SRC/bin/wine"
+            [[ -d /opt/wine-x64-out/share   ]] && cp -a /opt/wine-x64-out/share   "$X64_SRC/"
+            [[ -d /opt/wine-x64-out/include ]] && cp -a /opt/wine-x64-out/include "$X64_SRC/"
+          else
+            echo "ERROR: could not find wine binary. Full tree:"
+            find /opt/wine-x64-out -maxdepth 5 2>/dev/null | head -40
+            exit 1
+          fi
+
+          echo "Using X64_SRC=$X64_SRC"
           chmod +x scripts/package_container.sh
-          ./scripts/package_container.sh x64 /opt/wine-x64-out wine_${WINE_VERSION}
+          ./scripts/package_container.sh x64 "$X64_SRC" wine_${WINE_VERSION}
 
       - name: Upload container artifacts
         uses: actions/upload-artifact@v4
@@ -566,12 +592,31 @@ jobs:
       - name: Install Wine (arm64x)
         run: |
           cd build-arm64x
-          sudo make install
+          # Must pass PATH so sudo can find aarch64-w64-mingw32-clang from llvm-mingw
+          sudo env PATH="$PATH" make install
 
       - name: Package as GameHub container
         run: |
+          # Wine Android NDK builds install under $prefix/<abi>/ subdirectory
+          echo "=== Wine arm64x install tree ==="
+          find /opt/wine-arm64x-out -maxdepth 4 -name "wine" -type f 2>/dev/null | head -20 || true
+          ls /opt/wine-arm64x-out/ 2>/dev/null || echo "prefix dir missing"
+
+          if [[ -d /opt/wine-arm64x-out/lib/wine ]]; then
+            ARM_SRC=/opt/wine-arm64x-out
+          elif [[ -d /opt/wine-arm64x-out/arm64-v8a/lib/wine ]]; then
+            ARM_SRC=/opt/wine-arm64x-out/arm64-v8a
+            [[ -d /opt/wine-arm64x-out/share   ]] && cp -a /opt/wine-arm64x-out/share   "$ARM_SRC/"
+            [[ -d /opt/wine-arm64x-out/include ]] && cp -a /opt/wine-arm64x-out/include "$ARM_SRC/"
+          else
+            echo "ERROR: could not find arm64x wine libs. Full tree:"
+            find /opt/wine-arm64x-out -maxdepth 5 2>/dev/null | head -40
+            exit 1
+          fi
+
+          echo "Using ARM_SRC=$ARM_SRC"
           chmod +x scripts/package_container.sh
-          ./scripts/package_container.sh arm64x /opt/wine-arm64x-out wine_${WINE_VERSION}_arm64x
+          ./scripts/package_container.sh arm64x "$ARM_SRC" wine_${WINE_VERSION}_arm64x
 
       - name: Upload container artifacts
         uses: actions/upload-artifact@v4
