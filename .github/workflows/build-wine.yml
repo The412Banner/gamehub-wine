@@ -257,12 +257,13 @@ jobs:
       - name: Configure Wine (x64 Android — X11 backend)
         run: |
           mkdir build-x64 && cd build-x64
-          PKG_CONFIG_LIBDIR=/opt/android-x11-stubs/pkgconfig \
           ../wine-${WINE_VERSION}/configure \
             --host=x86_64-linux-android \
             --with-wine-tools=/opt/wine-host \
             --enable-win64 \
             --with-x \
+            --x-includes=/usr/include \
+            --x-libraries=/opt/android-x11-stubs \
             --without-xcomposite \
             --without-xfixes \
             --without-xinerama \
@@ -615,12 +616,13 @@ jobs:
       - name: Configure Wine (arm64x Android — X11 backend)
         run: |
           mkdir build-arm64x && cd build-arm64x
-          PKG_CONFIG_LIBDIR=/opt/android-x11-stubs-arm64/pkgconfig \
           ../wine-${WINE_VERSION}/configure \
             --host=aarch64-linux-android \
             --with-wine-tools=/opt/wine-host \
             --enable-win64 \
             --with-x \
+            --x-includes=/usr/include \
+            --x-libraries=/opt/android-x11-stubs-arm64 \
             --without-xcomposite \
             --without-xfixes \
             --without-xinerama \
