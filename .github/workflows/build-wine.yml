@@ -192,7 +192,7 @@ jobs:
             CROSSCXX="x86_64-w64-mingw32-g++" \
             FREETYPE_CFLAGS="$FREETYPE_CFLAGS" \
             FREETYPE_LIBS="$FREETYPE_LIBS" \
-            CFLAGS="-include strings.h -Wno-incompatible-function-pointer-types"
+            CFLAGS="-include strings.h -Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types"
 
       - name: Build Wine (x64)
         env:
@@ -338,7 +338,7 @@ jobs:
             CROSSCXX="aarch64-w64-mingw32-clang++" \
             FREETYPE_CFLAGS="$FREETYPE_CFLAGS" \
             FREETYPE_LIBS="$FREETYPE_LIBS" \
-            CFLAGS="-include strings.h -Wno-incompatible-function-pointer-types"
+            CFLAGS="-include strings.h -Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types"
 
       - name: Build Wine (arm64x)
         env:
