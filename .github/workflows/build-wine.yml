@@ -170,18 +170,24 @@ jobs:
                           print(f'{f}:{i+1}: {l}')
               except: pass
 
-          # --- Patch ALL driver files: remove BOOL show_flags from WindowPosChanged ---
-          # The definition in window.c is WITHOUT BOOL, but a header somewhere
-          # declares it WITH BOOL causing "conflicting types" at the definition site.
+          # --- Patch android.h: remove BOOL fullscreen from ANDROID_WindowPosChanged ---
+          # android.h:98 declares it WITH BOOL fullscreen, window.c:1059 defines it
+          # WITHOUT BOOL — remove from the declaration to match the definition.
           for f in sorted(glob.glob(f'{drv}/*')):
               try:
                   c = open(f).read()
                   if 'WindowPosChanged' not in c: continue
-                  p = re.sub(r',\s*BOOL\s+show_flags\b', '', c)   # remove param after comma
-                  p = re.sub(r'\bBOOL\s+show_flags\s*,\s*', '', p)  # remove param before comma
+                  # Remove BOOL <anyname> param (handles fullscreen, show_flags, etc.)
+                  p = re.sub(
+                      r'(ANDROID_WindowPosChanged\([^)]*UINT\s+swp_flags)\s*,\s*BOOL\s+\w+\b',
+                      r'\1',
+                      c, flags=re.DOTALL
+                  )
                   if p != c:
                       open(f, 'w').write(p)
-                      print(f'Patched {f}: removed BOOL show_flags')
+                      print(f'Patched {f}: removed BOOL param from WindowPosChanged')
+                  else:
+                      print(f'No BOOL param to remove in {f}')
               except Exception as e:
                   print(f'Error {f}: {e}')
 
@@ -347,11 +353,44 @@ jobs:
 
       - name: Patch Wine source for Android NDK compilation
         run: |
-          sed -i 's/BOOL show_flags, const struct window_rects \*new_rects/const struct window_rects *new_rects/g' \
-            wine-${WINE_VERSION}/dlls/wineandroid.drv/window.c
-          sed -i '/UNREFERENCED_PARAMETER(show_flags)/d' \
-            wine-${WINE_VERSION}/dlls/wineandroid.drv/window.c
-          echo "Patched wineandroid.drv/window.c"
+          python3 << 'PYEOF'
+          import re, glob, os
+
+          ver = os.environ.get('WINE_VERSION', '11.0')
+          drv = f'wine-{ver}/dlls/wineandroid.drv'
+
+          # --- Patch android.h: remove BOOL fullscreen from ANDROID_WindowPosChanged ---
+          # android.h:98 declares it WITH BOOL fullscreen, window.c:1059 defines it
+          # WITHOUT BOOL — remove from the declaration to match the definition.
+          for f in sorted(glob.glob(f'{drv}/*')):
+              try:
+                  c = open(f).read()
+                  if 'WindowPosChanged' not in c: continue
+                  # Remove BOOL <anyname> param (handles fullscreen, show_flags, etc.)
+                  p = re.sub(
+                      r'(ANDROID_WindowPosChanged\([^)]*UINT\s+swp_flags)\s*,\s*BOOL\s+\w+\b',
+                      r'\1',
+                      c, flags=re.DOTALL
+                  )
+                  if p != c:
+                      open(f, 'w').write(p)
+                      print(f'Patched {f}: removed BOOL param from WindowPosChanged')
+                  else:
+                      print(f'No BOOL param to remove in {f}')
+              except Exception as e:
+                  print(f'Error {f}: {e}')
+
+          # --- dllmain.c: cast function pointer to UINT64 ---
+          dc = f'{drv}/dllmain.c'
+          c = open(dc).read()
+          p = re.sub(r'=\s*android_start_device\s*;',
+                     '= (UINT64)(ULONG_PTR)android_start_device;', c)
+          if p != c:
+              open(dc, 'w').write(p)
+              print('Patched dllmain.c: cast android_start_device to UINT64')
+          else:
+              print('WARNING: android_start_device pattern not found in dllmain.c')
+          PYEOF
 
       - name: Configure Wine (arm64x Android)
         run: |
