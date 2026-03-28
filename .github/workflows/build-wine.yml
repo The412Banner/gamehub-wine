@@ -330,35 +330,48 @@ jobs:
         run: |
           cd build-x64
           sudo env PATH="$PATH" make install
+          cd ..
+
+          echo "=== build-x64/loader contents ==="
+          ls -la build-x64/loader/ 2>/dev/null | head -30 || echo "loader dir missing"
+          echo "=== build-x64/server contents ==="
+          ls -la build-x64/server/ 2>/dev/null | head -10 || echo "server dir missing"
+
+          # Wine Android NDK cross-compile does NOT install loader/wine via make install.
+          # Copy the executables manually from the build directory.
+          INST_BIN=/opt/wine-x64-out/x86_64/bin
+          sudo mkdir -p "$INST_BIN"
+
+          for candidate in build-x64/loader/wine build-x64/loader/wine64; do
+            if [[ -f "$candidate" ]]; then
+              sudo cp "$candidate" "$INST_BIN/wine"
+              echo "Installed $candidate → $INST_BIN/wine"
+              file "$INST_BIN/wine" || true
+              break
+            fi
+          done
+
+          for candidate in build-x64/server/wineserver; do
+            if [[ -f "$candidate" ]]; then
+              sudo cp "$candidate" "$INST_BIN/wineserver"
+              echo "Installed $candidate → $INST_BIN/wineserver"
+            fi
+          done
+
+          echo "=== $INST_BIN ==="
+          ls -la "$INST_BIN/" 2>/dev/null || echo "(empty)"
 
       - name: Package as GameHub container
         run: |
-          # Wine Android NDK builds install under $prefix/<abi>/ subdirectory
-          # Check both layouts (standard and Android ABI)
-          echo "=== Wine x64 install tree ==="
-          find /opt/wine-x64-out -maxdepth 4 -name "wine" -o -name "wine64" 2>/dev/null | head -20 || true
-          ls /opt/wine-x64-out/ 2>/dev/null || echo "prefix dir missing"
+          # The install layout is $prefix/x86_64/{bin,lib} + $prefix/{share,include}
+          # Merge share/ and include/ into the arch subdir for package_container.sh
+          X64_SRC=/opt/wine-x64-out/x86_64
+          [[ -d /opt/wine-x64-out/share   ]] && cp -a /opt/wine-x64-out/share   "$X64_SRC/"
+          [[ -d /opt/wine-x64-out/include ]] && cp -a /opt/wine-x64-out/include "$X64_SRC/"
 
-          if [[ -f /opt/wine-x64-out/bin/wine ]]; then
-            X64_SRC=/opt/wine-x64-out
-          elif [[ -f /opt/wine-x64-out/x86_64/bin/wine ]]; then
-            X64_SRC=/opt/wine-x64-out/x86_64
-            # bring share/ and include/ into the arch subdir so package_container.sh finds them
-            [[ -d /opt/wine-x64-out/share   ]] && cp -a /opt/wine-x64-out/share   "$X64_SRC/"
-            [[ -d /opt/wine-x64-out/include ]] && cp -a /opt/wine-x64-out/include "$X64_SRC/"
-          elif [[ -f /opt/wine-x64-out/x86_64/bin/wine64 ]]; then
-            # wine64 binary name instead of wine
-            X64_SRC=/opt/wine-x64-out/x86_64
-            ln -sf wine64 "$X64_SRC/bin/wine"
-            [[ -d /opt/wine-x64-out/share   ]] && cp -a /opt/wine-x64-out/share   "$X64_SRC/"
-            [[ -d /opt/wine-x64-out/include ]] && cp -a /opt/wine-x64-out/include "$X64_SRC/"
-          else
-            echo "ERROR: could not find wine binary. Full tree:"
-            find /opt/wine-x64-out -maxdepth 5 2>/dev/null | head -40
-            exit 1
-          fi
+          echo "=== $X64_SRC/bin ==="
+          ls -la "$X64_SRC/bin/" 2>/dev/null || echo "(no bin dir)"
 
-          echo "Using X64_SRC=$X64_SRC"
           chmod +x scripts/package_container.sh
           ./scripts/package_container.sh x64 "$X64_SRC" wine_${WINE_VERSION}
 
@@ -594,27 +607,59 @@ jobs:
           cd build-arm64x
           # Must pass PATH so sudo can find aarch64-w64-mingw32-clang from llvm-mingw
           sudo env PATH="$PATH" make install
+          cd ..
+
+          echo "=== build-arm64x/loader contents ==="
+          ls -la build-arm64x/loader/ 2>/dev/null | head -30 || echo "loader dir missing"
+          echo "=== build-arm64x/server contents ==="
+          ls -la build-arm64x/server/ 2>/dev/null | head -10 || echo "server dir missing"
+
+          # Wine Android NDK cross-compile does NOT install loader/wine via make install.
+          # Detect install layout and copy executables manually.
+          if [[ -d /opt/wine-arm64x-out/arm64-v8a ]]; then
+            INST_BIN=/opt/wine-arm64x-out/arm64-v8a/bin
+          else
+            INST_BIN=/opt/wine-arm64x-out/bin
+          fi
+          sudo mkdir -p "$INST_BIN"
+
+          for candidate in build-arm64x/loader/wine build-arm64x/loader/wine64; do
+            if [[ -f "$candidate" ]]; then
+              sudo cp "$candidate" "$INST_BIN/wine"
+              echo "Installed $candidate → $INST_BIN/wine"
+              file "$INST_BIN/wine" || true
+              break
+            fi
+          done
+
+          for candidate in build-arm64x/server/wineserver; do
+            if [[ -f "$candidate" ]]; then
+              sudo cp "$candidate" "$INST_BIN/wineserver"
+              echo "Installed $candidate → $INST_BIN/wineserver"
+            fi
+          done
+
+          echo "=== $INST_BIN ==="
+          ls -la "$INST_BIN/" 2>/dev/null || echo "(empty)"
 
       - name: Package as GameHub container
         run: |
-          # Wine Android NDK builds install under $prefix/<abi>/ subdirectory
-          echo "=== Wine arm64x install tree ==="
-          find /opt/wine-arm64x-out -maxdepth 4 -name "wine" -type f 2>/dev/null | head -20 || true
-          ls /opt/wine-arm64x-out/ 2>/dev/null || echo "prefix dir missing"
-
-          if [[ -d /opt/wine-arm64x-out/lib/wine ]]; then
-            ARM_SRC=/opt/wine-arm64x-out
-          elif [[ -d /opt/wine-arm64x-out/arm64-v8a/lib/wine ]]; then
+          # Determine actual install prefix layout
+          if [[ -d /opt/wine-arm64x-out/arm64-v8a/lib/wine ]]; then
             ARM_SRC=/opt/wine-arm64x-out/arm64-v8a
             [[ -d /opt/wine-arm64x-out/share   ]] && cp -a /opt/wine-arm64x-out/share   "$ARM_SRC/"
             [[ -d /opt/wine-arm64x-out/include ]] && cp -a /opt/wine-arm64x-out/include "$ARM_SRC/"
+          elif [[ -d /opt/wine-arm64x-out/lib/wine ]]; then
+            ARM_SRC=/opt/wine-arm64x-out
           else
             echo "ERROR: could not find arm64x wine libs. Full tree:"
             find /opt/wine-arm64x-out -maxdepth 5 2>/dev/null | head -40
             exit 1
           fi
 
-          echo "Using ARM_SRC=$ARM_SRC"
+          echo "=== $ARM_SRC/bin ==="
+          ls -la "$ARM_SRC/bin/" 2>/dev/null || echo "(no bin dir)"
+
           chmod +x scripts/package_container.sh
           ./scripts/package_container.sh arm64x "$ARM_SRC" wine_${WINE_VERSION}_arm64x
 
