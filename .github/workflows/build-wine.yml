@@ -273,7 +273,7 @@ jobs:
             CROSSCXX="x86_64-w64-mingw32-g++" \
             FREETYPE_CFLAGS="$FREETYPE_CFLAGS" \
             FREETYPE_LIBS="$FREETYPE_LIBS" \
-            CFLAGS="-include strings.h -Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion" \
+            CFLAGS="-D_GNU_SOURCE -include strings.h -Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion" \
             CROSSCFLAGS="-Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion"
 
       - name: Build Wine (x64)
@@ -487,7 +487,7 @@ jobs:
             CROSSCXX="aarch64-w64-mingw32-clang++" \
             FREETYPE_CFLAGS="$FREETYPE_CFLAGS" \
             FREETYPE_LIBS="$FREETYPE_LIBS" \
-            CFLAGS="-include strings.h -Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion" \
+            CFLAGS="-D_GNU_SOURCE -include strings.h -Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion" \
             CROSSCFLAGS="-Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion"
 
       - name: Build Wine (arm64x)
