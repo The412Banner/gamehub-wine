@@ -30,12 +30,10 @@ env:
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
   # Build host Wine (native Linux) — provides wrc, widl, winebuild tools
-  # needed for cross-compilation. Cached heavily.
+  # needed for cross-compilation. Cached by build directory (not install).
   # ──────────────────────────────────────────────────────────────────────────
   build-host-tools:
     runs-on: ubuntu-24.04
-    outputs:
-      tools_path: ${{ steps.tools.outputs.path }}
 
     steps:
       - name: Install build dependencies
@@ -44,23 +42,21 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             flex bison gettext gcc g++ make pkg-config \
             gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
-            gcc-aarch64-linux-gnu \
             libgnutls28-dev libunwind-dev \
             mingw-w64-tools
 
-      - name: Cache host Wine tools
+      - name: Cache host Wine tools build dir
         id: cache-tools
         uses: actions/cache@v4
         with:
-          path: /opt/wine-host
-          key: wine-host-tools-${{ env.WINE_VERSION }}-v1
+          path: build-host
+          key: wine-host-tools-${{ env.WINE_VERSION }}-v3
 
       - name: Download Wine source
         if: steps.cache-tools.outputs.cache-hit != 'true'
         run: |
           wget -q "https://dl.winehq.org/wine/source/${WINE_VERSION%%.*}.0/wine-${WINE_VERSION}.tar.xz"
           tar -xf "wine-${WINE_VERSION}.tar.xz"
-          echo "WINE_SRC=$PWD/wine-${WINE_VERSION}" >> $GITHUB_ENV
 
       - name: Build host Wine tools
         if: steps.cache-tools.outputs.cache-hit != 'true'
@@ -71,16 +67,15 @@ jobs:
             --enable-win64 \
             --without-x \
             --without-freetype \
-            --disable-tests \
-            --prefix=/opt/wine-host
+            --disable-tests
           make -j$(nproc) __tooldeps__
-          sudo make install-lib
 
       - name: Upload host tools artifact
+        # Upload the build directory — --with-wine-tools needs tools/widl/widl etc.
         uses: actions/upload-artifact@v4
         with:
           name: wine-host-tools
-          path: /opt/wine-host
+          path: build-host
           retention-days: 1
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -124,7 +119,6 @@ jobs:
           echo "AR=$TOOLCHAIN/bin/llvm-ar" >> $GITHUB_ENV
           echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib" >> $GITHUB_ENV
           echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
-          # Verify
           $TOOLCHAIN/bin/x86_64-linux-android${API_LEVEL}-clang --version
 
       - name: Configure Wine (x64 Android)
@@ -156,8 +150,6 @@ jobs:
             --without-pcap \
             --without-netapi \
             --without-krb5 \
-            --without-ldap \
-            --without-cms \
             --without-capi \
             --disable-tests \
             --prefix=/opt/wine-x64-out \
@@ -195,6 +187,7 @@ jobs:
 
   # ──────────────────────────────────────────────────────────────────────────
   # Build arm64X: aarch64-linux-android (native ARM64 — no emulation)
+  # Uses llvm-mingw for aarch64-w64-mingw32 cross-compiler (not in Ubuntu apt)
   # ──────────────────────────────────────────────────────────────────────────
   build-arm64x:
     runs-on: ubuntu-24.04
@@ -210,10 +203,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             flex bison gettext make pkg-config \
-            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
-            gcc-mingw-w64-aarch64 \
+            gcc-mingw-w64-i686 \
             mingw-w64-tools \
             zstd
+
+      - name: Install llvm-mingw (provides aarch64-w64-mingw32 cross-compiler)
+        run: |
+          LLVM_MINGW_VER=20241217
+          wget -q "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VER}/llvm-mingw-${LLVM_MINGW_VER}-ucrt-ubuntu-20.04-x86_64.tar.xz"
+          tar -xf "llvm-mingw-${LLVM_MINGW_VER}-ucrt-ubuntu-20.04-x86_64.tar.xz" -C /opt
+          echo "/opt/llvm-mingw-${LLVM_MINGW_VER}-ucrt-ubuntu-20.04-x86_64/bin" >> $GITHUB_PATH
 
       - name: Download Wine source
         run: |
@@ -266,8 +265,6 @@ jobs:
             --without-pcap \
             --without-netapi \
             --without-krb5 \
-            --without-ldap \
-            --without-cms \
             --without-capi \
             --disable-tests \
             --prefix=/opt/wine-arm64x-out \
@@ -275,8 +272,8 @@ jobs:
             CXX="$CXX" \
             AR="$AR" \
             RANLIB="$RANLIB" \
-            CROSSCC="aarch64-w64-mingw32-gcc" \
-            CROSSCXX="aarch64-w64-mingw32-g++"
+            CROSSCC="aarch64-w64-mingw32-clang" \
+            CROSSCXX="aarch64-w64-mingw32-clang++"
 
       - name: Build Wine (arm64x)
         run: |
