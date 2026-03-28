@@ -133,7 +133,9 @@ jobs:
 
       - name: Build FreeType for Android x86_64
         run: |
-          wget -q "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.xz"
+          wget -q "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.xz" || \
+            wget -q "https://sourceforge.net/projects/freetype/files/freetype2/${FREETYPE_VERSION}/freetype-${FREETYPE_VERSION}.tar.xz/download" \
+              -O "freetype-${FREETYPE_VERSION}.tar.xz"
           tar xf "freetype-${FREETYPE_VERSION}.tar.xz"
           mkdir freetype-build && cd freetype-build
           ../freetype-${FREETYPE_VERSION}/configure \
@@ -370,7 +372,9 @@ jobs:
 
       - name: Build FreeType for Android aarch64
         run: |
-          wget -q "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.xz"
+          wget -q "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.xz" || \
+            wget -q "https://sourceforge.net/projects/freetype/files/freetype2/${FREETYPE_VERSION}/freetype-${FREETYPE_VERSION}.tar.xz/download" \
+              -O "freetype-${FREETYPE_VERSION}.tar.xz"
           tar xf "freetype-${FREETYPE_VERSION}.tar.xz"
           mkdir freetype-build && cd freetype-build
           ../freetype-${FREETYPE_VERSION}/configure \
