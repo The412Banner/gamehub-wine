@@ -276,6 +276,15 @@ jobs:
             CFLAGS="-D_GNU_SOURCE -include strings.h -Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion" \
             CROSSCFLAGS="-Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion"
 
+      - name: Patch generated Makefile (x64)
+        run: |
+          # wineandroid.drv links with -Wl,-z,defs which requires all symbols resolved
+          # at link time. But java.c symbols (drawable_mutex, set_window_opengl_drawable)
+          # are provided at runtime by GameHub's libwinemu.so. Remove -z,defs so the
+          # linker accepts unresolved symbols (Android dynamic linker resolves at load time).
+          sed -i 's/-Wl,-z,defs//' build-x64/dlls/wineandroid.drv/Makefile || true
+          echo "Patched build-x64/dlls/wineandroid.drv/Makefile: removed -z,defs"
+
       - name: Build Wine (x64)
         env:
           # Tell wrc where to find nls/locale.nls from the downloaded host tools
@@ -489,6 +498,11 @@ jobs:
             FREETYPE_LIBS="$FREETYPE_LIBS" \
             CFLAGS="-D_GNU_SOURCE -include strings.h -Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion" \
             CROSSCFLAGS="-Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion"
+
+      - name: Patch generated Makefile (arm64x)
+        run: |
+          sed -i 's/-Wl,-z,defs//' build-arm64x/dlls/wineandroid.drv/Makefile || true
+          echo "Patched build-arm64x/dlls/wineandroid.drv/Makefile: removed -z,defs"
 
       - name: Build Wine (arm64x)
         env:
