@@ -212,6 +212,25 @@ jobs:
               print('Patched Makefile.in: removed wine-debug.apk from build targets')
           else:
               print('wine-debug.apk not found in Makefile.in (OK)')
+
+          # --- server/thread.c: add sched.h for cpu_set_t ---
+          # Android NDK configure detection doesn't find sched.h during cross-compile,
+          # so cpu_set_t / CPU_ZERO / CPU_SET are undeclared.
+          ver_local = os.environ.get('WINE_VERSION', '11.0')
+          tc = f'wine-{ver_local}/server/thread.c'
+          try:
+              c = open(tc).read()
+              if 'cpu_set_t' in c and '<sched.h>' not in c:
+                  # Inject after first #include line
+                  p = re.sub(r'(#include\s+[<"][^\n]+\n)',
+                             r'\1#include <sched.h>  /* Android NDK: cpu_set_t */\n',
+                             c, count=1)
+                  open(tc, 'w').write(p)
+                  print('Patched server/thread.c: added sched.h for cpu_set_t')
+              else:
+                  print('server/thread.c: sched.h already present or no cpu_set_t usage')
+          except Exception as e:
+              print(f'Error patching server/thread.c: {e}')
           PYEOF
 
       - name: Configure Wine (x64 Android)
@@ -410,6 +429,22 @@ jobs:
               print('Patched Makefile.in: removed wine-debug.apk from build targets')
           else:
               print('wine-debug.apk not found in Makefile.in (OK)')
+
+          # --- server/thread.c: add sched.h for cpu_set_t ---
+          ver_local = os.environ.get('WINE_VERSION', '11.0')
+          tc = f'wine-{ver_local}/server/thread.c'
+          try:
+              c = open(tc).read()
+              if 'cpu_set_t' in c and '<sched.h>' not in c:
+                  p = re.sub(r'(#include\s+[<"][^\n]+\n)',
+                             r'\1#include <sched.h>  /* Android NDK: cpu_set_t */\n',
+                             c, count=1)
+                  open(tc, 'w').write(p)
+                  print('Patched server/thread.c: added sched.h for cpu_set_t')
+              else:
+                  print('server/thread.c: sched.h already present or no cpu_set_t usage')
+          except Exception as e:
+              print(f'Error patching server/thread.c: {e}')
           PYEOF
 
       - name: Configure Wine (arm64x Android)
