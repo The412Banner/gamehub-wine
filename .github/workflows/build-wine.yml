@@ -638,6 +638,20 @@ jobs:
                   print('server/thread.c: sched.h already present or no cpu_set_t usage')
           except Exception as e:
               print(f'Error patching server/thread.c: {e}')
+
+          # --- wineandroid.drv/android.h: remove BOOL fullscreen parameter ---
+          ah = f'wine-{ver_local}/dlls/wineandroid.drv/android.h'
+          try:
+              c = open(ah).read()
+              orig = c
+              c = re.sub(r',\s*BOOL\s+fullscreen\b', '', c)
+              if c != orig:
+                  open(ah, 'w').write(c)
+                  print('Patched android.h: removed BOOL fullscreen parameter')
+              else:
+                  print('android.h: BOOL fullscreen not found (OK)')
+          except Exception as e:
+              print(f'Error patching android.h: {e}')
           PYEOF
 
       - name: Configure Wine (arm64x Android — X11 backend)
