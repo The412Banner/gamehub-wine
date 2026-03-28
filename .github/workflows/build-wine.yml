@@ -198,31 +198,10 @@ jobs:
 
           # Create pkg-config files for Wine configure
           mkdir -p /opt/android-x11-stubs/pkgconfig
-          cat > /opt/android-x11-stubs/pkgconfig/x11.pc << 'EOF'
-prefix=/opt/android-x11-stubs
-exec_prefix=${prefix}
-libdir=${exec_prefix}
-includedir=/usr/include
-
-Name: X11
-Description: X Library stub for Android NDK cross-compilation
-Version: 1.8.0
-Libs: -L${libdir} -lX11
-Cflags: -I${includedir}
-EOF
-          cat > /opt/android-x11-stubs/pkgconfig/xext.pc << 'EOF'
-prefix=/opt/android-x11-stubs
-exec_prefix=${prefix}
-libdir=${exec_prefix}
-includedir=/usr/include
-
-Name: Xext
-Description: Misc X Extension Library stub for Android NDK cross-compilation
-Version: 1.3.5
-Requires: x11
-Libs: -L${libdir} -lXext
-Cflags: -I${includedir}
-EOF
+          printf 'prefix=/opt/android-x11-stubs\nexec_prefix=${prefix}\nlibdir=${exec_prefix}\nincludedir=/usr/include\n\nName: X11\nDescription: X Library stub for Android NDK cross-compilation\nVersion: 1.8.0\nLibs: -L${libdir} -lX11\nCflags: -I${includedir}\n' \
+            > /opt/android-x11-stubs/pkgconfig/x11.pc
+          printf 'prefix=/opt/android-x11-stubs\nexec_prefix=${prefix}\nlibdir=${exec_prefix}\nincludedir=/usr/include\n\nName: Xext\nDescription: Misc X Extension Library stub for Android NDK cross-compilation\nVersion: 1.3.5\nRequires: x11\nLibs: -L${libdir} -lXext\nCflags: -I${includedir}\n' \
+            > /opt/android-x11-stubs/pkgconfig/xext.pc
           echo "X11 stubs created:"
           ls -la /opt/android-x11-stubs/
 
@@ -580,31 +559,10 @@ EOF
 
           # Create pkg-config files
           mkdir -p /opt/android-x11-stubs-arm64/pkgconfig
-          cat > /opt/android-x11-stubs-arm64/pkgconfig/x11.pc << 'EOF'
-prefix=/opt/android-x11-stubs-arm64
-exec_prefix=${prefix}
-libdir=${exec_prefix}
-includedir=/usr/include
-
-Name: X11
-Description: X Library stub for Android NDK cross-compilation
-Version: 1.8.0
-Libs: -L${libdir} -lX11
-Cflags: -I${includedir}
-EOF
-          cat > /opt/android-x11-stubs-arm64/pkgconfig/xext.pc << 'EOF'
-prefix=/opt/android-x11-stubs-arm64
-exec_prefix=${prefix}
-libdir=${exec_prefix}
-includedir=/usr/include
-
-Name: Xext
-Description: Misc X Extension Library stub for Android NDK cross-compilation
-Version: 1.3.5
-Requires: x11
-Libs: -L${libdir} -lXext
-Cflags: -I${includedir}
-EOF
+          printf 'prefix=/opt/android-x11-stubs-arm64\nexec_prefix=${prefix}\nlibdir=${exec_prefix}\nincludedir=/usr/include\n\nName: X11\nDescription: X Library stub for Android NDK cross-compilation\nVersion: 1.8.0\nLibs: -L${libdir} -lX11\nCflags: -I${includedir}\n' \
+            > /opt/android-x11-stubs-arm64/pkgconfig/x11.pc
+          printf 'prefix=/opt/android-x11-stubs-arm64\nexec_prefix=${prefix}\nlibdir=${exec_prefix}\nincludedir=/usr/include\n\nName: Xext\nDescription: Misc X Extension Library stub for Android NDK cross-compilation\nVersion: 1.3.5\nRequires: x11\nLibs: -L${libdir} -lXext\nCflags: -I${includedir}\n' \
+            > /opt/android-x11-stubs-arm64/pkgconfig/xext.pc
           echo "ARM64 X11 stubs created:"
           ls -la /opt/android-x11-stubs-arm64/
 
