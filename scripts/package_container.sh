@@ -37,7 +37,11 @@ if [[ "$FRAMEWORK" == "x64" ]]; then
     ROOT_DIR="wine_out"
     ARCH_DIR="x86_64"
 elif [[ "$FRAMEWORK" == "arm64x" ]]; then
-    [[ -f "$SRC/bin/wine" || -L "$SRC/bin/wine" ]] || { echo "ERROR: $SRC/bin/wine not found"; exit 1; }
+    # wine binary is a symlink to lib/wine/aarch64-unix/wine — check the real binary
+    REAL_WINE=$(find "$SRC/lib/wine" -name "wine" -type f 2>/dev/null | head -1)
+    [[ -n "$REAL_WINE" ]] || { echo "ERROR: wine binary not found under $SRC/lib/wine/"; exit 1; }
+    file "$REAL_WINE" | grep -q "aarch64\|ARM aarch64" || { echo "ERROR: wine binary is not ARM64"; exit 1; }
+    file "$REAL_WINE" | grep -q "linker64" || { echo "ERROR: wine binary is not Android NDK (missing /system/bin/linker64)"; exit 1; }
     ROOT_DIR="wine_arm64x_out"
     ARCH_DIR="arm64-v8a"
 else

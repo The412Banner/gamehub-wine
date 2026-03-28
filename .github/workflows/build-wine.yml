@@ -1,0 +1,356 @@
+name: Build Wine for Android (GameHub format)
+
+on:
+  workflow_dispatch:
+    inputs:
+      wine_version:
+        description: 'Wine version to build (e.g. 11.0, 11.1, 10.0)'
+        required: true
+        default: '11.0'
+      framework:
+        description: 'Target framework'
+        required: true
+        type: choice
+        options:
+          - x64
+          - arm64x
+          - both
+        default: 'both'
+      upload_release:
+        description: 'Upload to Containers release when done'
+        required: true
+        type: boolean
+        default: true
+
+env:
+  WINE_VERSION: ${{ inputs.wine_version }}
+  NDK: /usr/local/lib/android/sdk/ndk/27.3.13750724
+  API_LEVEL: 28
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Build host Wine (native Linux) — provides wrc, widl, winebuild tools
+  # needed for cross-compilation. Cached heavily.
+  # ──────────────────────────────────────────────────────────────────────────
+  build-host-tools:
+    runs-on: ubuntu-24.04
+    outputs:
+      tools_path: ${{ steps.tools.outputs.path }}
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            flex bison gettext gcc g++ make pkg-config \
+            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
+            gcc-aarch64-linux-gnu \
+            libgnutls28-dev libunwind-dev \
+            mingw-w64-tools
+
+      - name: Cache host Wine tools
+        id: cache-tools
+        uses: actions/cache@v4
+        with:
+          path: /opt/wine-host
+          key: wine-host-tools-${{ env.WINE_VERSION }}-v1
+
+      - name: Download Wine source
+        if: steps.cache-tools.outputs.cache-hit != 'true'
+        run: |
+          wget -q "https://dl.winehq.org/wine/source/${WINE_VERSION%.*}/wine-${WINE_VERSION}.tar.xz"
+          tar -xf "wine-${WINE_VERSION}.tar.xz"
+          echo "WINE_SRC=$PWD/wine-${WINE_VERSION}" >> $GITHUB_ENV
+
+      - name: Build host Wine tools
+        if: steps.cache-tools.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p build-host
+          cd build-host
+          ../wine-${WINE_VERSION}/configure \
+            --enable-win64 \
+            --without-x \
+            --without-freetype \
+            --disable-tests \
+            --prefix=/opt/wine-host
+          make -j$(nproc) __tooldeps__
+          sudo make install-lib
+
+      - name: Upload host tools artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wine-host-tools
+          path: /opt/wine-host
+          retention-days: 1
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Build X64: x86_64-linux-android (runs via Box64/FEX on device)
+  # ──────────────────────────────────────────────────────────────────────────
+  build-x64:
+    runs-on: ubuntu-24.04
+    needs: build-host-tools
+    if: inputs.framework == 'x64' || inputs.framework == 'both'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            flex bison gettext make pkg-config \
+            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
+            mingw-w64-tools \
+            zstd
+
+      - name: Download Wine source
+        run: |
+          wget -q "https://dl.winehq.org/wine/source/${WINE_VERSION%.*}/wine-${WINE_VERSION}.tar.xz"
+          tar -xf "wine-${WINE_VERSION}.tar.xz"
+
+      - name: Download host tools artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wine-host-tools
+          path: /opt/wine-host
+
+      - name: Set up Android NDK toolchain (x86_64)
+        run: |
+          TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
+          echo "CC=$TOOLCHAIN/bin/x86_64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "CXX=$TOOLCHAIN/bin/x86_64-linux-android${API_LEVEL}-clang++" >> $GITHUB_ENV
+          echo "AR=$TOOLCHAIN/bin/llvm-ar" >> $GITHUB_ENV
+          echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib" >> $GITHUB_ENV
+          echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
+          # Verify
+          $TOOLCHAIN/bin/x86_64-linux-android${API_LEVEL}-clang --version
+
+      - name: Configure Wine (x64 Android)
+        run: |
+          mkdir build-x64 && cd build-x64
+          ../wine-${WINE_VERSION}/configure \
+            --host=x86_64-linux-android \
+            --with-wine-tools=/opt/wine-host \
+            --enable-win64 \
+            --without-x \
+            --without-xcomposite \
+            --without-xfixes \
+            --without-xinerama \
+            --without-xinput \
+            --without-xinput2 \
+            --without-xrandr \
+            --without-xrender \
+            --without-xshape \
+            --without-xshm \
+            --without-xxf86vm \
+            --without-wayland \
+            --without-dbus \
+            --without-pulse \
+            --without-alsa \
+            --without-cups \
+            --without-sane \
+            --without-v4l2 \
+            --without-opencl \
+            --without-pcap \
+            --without-netapi \
+            --without-krb5 \
+            --without-ldap \
+            --without-cms \
+            --without-capi \
+            --disable-tests \
+            --prefix=/opt/wine-x64-out \
+            CC="$CC" \
+            CXX="$CXX" \
+            AR="$AR" \
+            RANLIB="$RANLIB" \
+            CROSSCC="x86_64-w64-mingw32-gcc" \
+            CROSSCXX="x86_64-w64-mingw32-g++"
+
+      - name: Build Wine (x64)
+        run: |
+          cd build-x64
+          make -j$(nproc)
+
+      - name: Install Wine (x64)
+        run: |
+          cd build-x64
+          sudo make install
+
+      - name: Package as GameHub container
+        run: |
+          chmod +x scripts/package_container.sh
+          ./scripts/package_container.sh x64 /opt/wine-x64-out wine_${WINE_VERSION}
+
+      - name: Upload container artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-x64
+          path: |
+            wine_${{ env.WINE_VERSION }}.tar.zst
+            *.tzst
+            containers_entry_*.json
+          retention-days: 7
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Build arm64X: aarch64-linux-android (native ARM64 — no emulation)
+  # ──────────────────────────────────────────────────────────────────────────
+  build-arm64x:
+    runs-on: ubuntu-24.04
+    needs: build-host-tools
+    if: inputs.framework == 'arm64x' || inputs.framework == 'both'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            flex bison gettext make pkg-config \
+            gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 \
+            gcc-mingw-w64-aarch64 \
+            mingw-w64-tools \
+            zstd
+
+      - name: Download Wine source
+        run: |
+          wget -q "https://dl.winehq.org/wine/source/${WINE_VERSION%.*}/wine-${WINE_VERSION}.tar.xz"
+          tar -xf "wine-${WINE_VERSION}.tar.xz"
+
+      - name: Download host tools artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wine-host-tools
+          path: /opt/wine-host
+
+      - name: Set up Android NDK toolchain (aarch64)
+        run: |
+          TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
+          echo "CC=$TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang" >> $GITHUB_ENV
+          echo "CXX=$TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang++" >> $GITHUB_ENV
+          echo "AR=$TOOLCHAIN/bin/llvm-ar" >> $GITHUB_ENV
+          echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib" >> $GITHUB_ENV
+          echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
+          $TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang --version
+
+      - name: Configure Wine (arm64x Android)
+        run: |
+          mkdir build-arm64x && cd build-arm64x
+          ../wine-${WINE_VERSION}/configure \
+            --host=aarch64-linux-android \
+            --with-wine-tools=/opt/wine-host \
+            --enable-win64 \
+            --without-x \
+            --without-xcomposite \
+            --without-xfixes \
+            --without-xinerama \
+            --without-xinput \
+            --without-xinput2 \
+            --without-xrandr \
+            --without-xrender \
+            --without-xshape \
+            --without-xshm \
+            --without-xxf86vm \
+            --without-wayland \
+            --without-dbus \
+            --without-pulse \
+            --without-alsa \
+            --without-cups \
+            --without-sane \
+            --without-v4l2 \
+            --without-opencl \
+            --without-pcap \
+            --without-netapi \
+            --without-krb5 \
+            --without-ldap \
+            --without-cms \
+            --without-capi \
+            --disable-tests \
+            --prefix=/opt/wine-arm64x-out \
+            CC="$CC" \
+            CXX="$CXX" \
+            AR="$AR" \
+            RANLIB="$RANLIB" \
+            CROSSCC="aarch64-w64-mingw32-gcc" \
+            CROSSCXX="aarch64-w64-mingw32-g++"
+
+      - name: Build Wine (arm64x)
+        run: |
+          cd build-arm64x
+          make -j$(nproc)
+
+      - name: Install Wine (arm64x)
+        run: |
+          cd build-arm64x
+          sudo make install
+
+      - name: Package as GameHub container
+        run: |
+          chmod +x scripts/package_container.sh
+          ./scripts/package_container.sh arm64x /opt/wine-arm64x-out wine_${WINE_VERSION}_arm64x
+
+      - name: Upload container artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-arm64x
+          path: |
+            wine_${{ env.WINE_VERSION }}_arm64x.tar.zst
+            *.tzst
+            containers_entry_*.json
+          retention-days: 7
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Upload both containers to the Containers release
+  # ──────────────────────────────────────────────────────────────────────────
+  upload-release:
+    runs-on: ubuntu-24.04
+    needs: [build-x64, build-arm64x]
+    if: |
+      always() &&
+      inputs.upload_release == true &&
+      (needs.build-x64.result == 'success' || needs.build-x64.result == 'skipped') &&
+      (needs.build-arm64x.result == 'success' || needs.build-arm64x.result == 'skipped')
+
+    steps:
+      - name: Download x64 artifact
+        if: inputs.framework == 'x64' || inputs.framework == 'both'
+        uses: actions/download-artifact@v4
+        with:
+          name: container-x64
+          path: ./upload
+
+      - name: Download arm64x artifact
+        if: inputs.framework == 'arm64x' || inputs.framework == 'both'
+        uses: actions/download-artifact@v4
+        with:
+          name: container-arm64x
+          path: ./upload
+
+      - name: Ensure Containers release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view Containers --repo ${{ github.repository }} 2>/dev/null || \
+            gh release create Containers \
+              --repo ${{ github.repository }} \
+              --title "Containers" \
+              --notes "Wine/Proton container files for GameHub/BannerHub" \
+              --prerelease
+
+      - name: Upload container files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -lh ./upload/
+          gh release upload Containers ./upload/*.tar.zst ./upload/*.tzst \
+            --repo ${{ github.repository }} \
+            --clobber
+
+      - name: Print containers.json entries
+        run: |
+          echo "=== Paste these entries into bannerhub-api/data/containers.json ==="
+          cat ./upload/containers_entry_*.json
