@@ -51,7 +51,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build-host
-          key: wine-host-tools-${{ env.WINE_VERSION }}-v4
+          key: wine-host-tools-${{ env.WINE_VERSION }}-v5
 
       - name: Download Wine source
         if: steps.cache-tools.outputs.cache-hit != 'true'
@@ -70,9 +70,10 @@ jobs:
             --without-freetype \
             --disable-tests
           make -j$(nproc) __tooldeps__
-          # Build locale.nls — needed by wrc at compile time to process .rc files
-          # wrc looks for WINE_BUILD_DIR/nls/locale.nls; include nls/ in artifact
-          make nls/locale.nls || make -C nls locale.nls || true
+          # Copy locale.nls from Wine source — it's pre-generated in the tarball.
+          # wrc needs WINE_BUILD_DIR/nls/locale.nls when compiling .rc files.
+          mkdir -p nls
+          cp ../wine-${WINE_VERSION}/nls/locale.nls nls/locale.nls
 
       - name: Upload host tools artifact
         # Upload build-host/ directory — --with-wine-tools needs tools/widl/widl etc.
