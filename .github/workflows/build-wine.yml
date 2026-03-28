@@ -152,6 +152,18 @@ jobs:
           echo "FREETYPE_CFLAGS=-I/opt/freetype-x64/include/freetype2" >> $GITHUB_ENV
           echo "FREETYPE_LIBS=-L/opt/freetype-x64/lib -lfreetype" >> $GITHUB_ENV
 
+      - name: Patch Wine source for Android NDK compilation
+        run: |
+          # wineandroid.drv/window.c: ANDROID_WindowPosChanged has extra BOOL show_flags
+          # parameter that doesn't match the wine/gdi_driver.h struct declaration.
+          # Remove it so both declaration and definition agree.
+          sed -i 's/BOOL show_flags, const struct window_rects \*new_rects/const struct window_rects *new_rects/g' \
+            wine-${WINE_VERSION}/dlls/wineandroid.drv/window.c
+          # Also remove any usage of show_flags (may be referenced in function body)
+          sed -i '/UNREFERENCED_PARAMETER(show_flags)/d' \
+            wine-${WINE_VERSION}/dlls/wineandroid.drv/window.c
+          echo "Patched wineandroid.drv/window.c"
+
       - name: Configure Wine (x64 Android)
         run: |
           mkdir build-x64 && cd build-x64
@@ -192,7 +204,7 @@ jobs:
             CROSSCXX="x86_64-w64-mingw32-g++" \
             FREETYPE_CFLAGS="$FREETYPE_CFLAGS" \
             FREETYPE_LIBS="$FREETYPE_LIBS" \
-            CFLAGS="-include strings.h -Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types"
+            CFLAGS="-include strings.h -Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion"
 
       - name: Build Wine (x64)
         env:
@@ -298,6 +310,14 @@ jobs:
           echo "FREETYPE_CFLAGS=-I/opt/freetype-arm64/include/freetype2" >> $GITHUB_ENV
           echo "FREETYPE_LIBS=-L/opt/freetype-arm64/lib -lfreetype" >> $GITHUB_ENV
 
+      - name: Patch Wine source for Android NDK compilation
+        run: |
+          sed -i 's/BOOL show_flags, const struct window_rects \*new_rects/const struct window_rects *new_rects/g' \
+            wine-${WINE_VERSION}/dlls/wineandroid.drv/window.c
+          sed -i '/UNREFERENCED_PARAMETER(show_flags)/d' \
+            wine-${WINE_VERSION}/dlls/wineandroid.drv/window.c
+          echo "Patched wineandroid.drv/window.c"
+
       - name: Configure Wine (arm64x Android)
         run: |
           mkdir build-arm64x && cd build-arm64x
@@ -338,7 +358,7 @@ jobs:
             CROSSCXX="aarch64-w64-mingw32-clang++" \
             FREETYPE_CFLAGS="$FREETYPE_CFLAGS" \
             FREETYPE_LIBS="$FREETYPE_LIBS" \
-            CFLAGS="-include strings.h -Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types"
+            CFLAGS="-include strings.h -Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion"
 
       - name: Build Wine (arm64x)
         env:
