@@ -363,11 +363,13 @@ jobs:
           echo "=== build-x64/server contents ==="
           ls -la build-x64/server/ 2>/dev/null | head -10 || echo "server dir missing"
           echo "=== x86_64-unix libs (install prefix) ==="
-          ls /tmp/wine-x64-out/lib/wine/x86_64-unix/ 2>/dev/null | head -10 || echo "missing"
+          ls /tmp/wine-x64-out/x86_64/lib/wine/x86_64-unix/ 2>/dev/null | head -10 || echo "missing"
 
-          # Wine Android NDK cross-compile does NOT install loader/wine via make install.
-          # Copy the executables manually into the install prefix bin/ dir.
-          INST_BIN=/tmp/wine-x64-out/bin
+          # Wine installs to $prefix/x86_64/ (multiarch layout for --enable-win64).
+          # make install does NOT install the wine/wineserver ELF loader to x86_64/bin/
+          # (it installs them to x86_64/lib/wine/x86_64-unix/ instead, and creates
+          # shell-script symlinks in bin/). Copy the real NDK ELF manually.
+          INST_BIN=/tmp/wine-x64-out/x86_64/bin
           mkdir -p "$INST_BIN"
 
           for candidate in build-x64/loader/wine build-x64/loader/wine64; do
@@ -391,9 +393,11 @@ jobs:
 
       - name: Package as GameHub container
         run: |
-          # make install puts everything at $prefix = /tmp/wine-x64-out
-          # bin/wine is manually placed there above; lib/wine/ is from make install.
-          X64_SRC=/tmp/wine-x64-out
+          # Wine installs to $prefix/x86_64/ (multiarch layout).
+          # share/ and include/ land at $prefix/ — merge into x86_64/ for package_container.sh.
+          X64_SRC=/tmp/wine-x64-out/x86_64
+          [[ -d /tmp/wine-x64-out/share   ]] && cp -a /tmp/wine-x64-out/share   "$X64_SRC/"
+          [[ -d /tmp/wine-x64-out/include ]] && cp -a /tmp/wine-x64-out/include "$X64_SRC/"
 
           echo "=== $X64_SRC/bin ==="
           ls -la "$X64_SRC/bin/" 2>/dev/null || echo "(no bin dir)"
