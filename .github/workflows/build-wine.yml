@@ -391,6 +391,67 @@ jobs:
           echo "=== $INST_BIN ==="
           ls -la "$INST_BIN/" 2>/dev/null || echo "(empty)"
 
+      - name: Configure Wine (i386 PE DLLs — WoW64 support)
+        # Build 32-bit Windows PE DLLs (i386-windows) using Wine's new-wow64 architecture.
+        # --with-wine64 hooks into the already-built x64 tree; only PE DLLs are built
+        # (no unix-side for i386 in new-wow64). Working containers (wine 9.13) have 721
+        # i386-windows DLLs — without them wineboot exits immediately after X11 window.
+        run: |
+          mkdir build-i386 && cd build-i386
+          ../wine-${WINE_VERSION}/configure \
+            --with-wine64=../build-x64 \
+            --disable-tests \
+            --prefix=/tmp/wine-x64-out \
+            CROSSCC="i686-w64-mingw32-gcc" \
+            CROSSCXX="i686-w64-mingw32-g++" \
+            CROSSCFLAGS="-Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion"
+
+      - name: Patch generated Makefile (i386)
+        run: |
+          python3 << 'PYEOF'
+          import re
+          mf = 'build-i386/Makefile'
+          c = open(mf).read()
+          orig = c
+          c = re.sub(r'\s*-Wl,-z,defs\b', '', c)
+          c = re.sub(r'\s*dlls/wineandroid\.drv/wine-debug\.apk\b', '', c)
+          if c != orig:
+              open(mf, 'w').write(c)
+              print('Patched build-i386/Makefile: -Wl,-z,defs + wine-debug.apk removed')
+          else:
+              print('build-i386/Makefile: nothing to patch (OK)')
+          PYEOF
+
+      - name: Build Wine i386 PE DLLs (WoW64)
+        env:
+          WINE_BUILD_DIR: /opt/wine-host
+        run: |
+          cd build-i386
+          make -j$(nproc)
+
+      - name: Install Wine i386 PE DLLs
+        run: |
+          cd build-i386
+          make install
+          echo "=== i386-windows DLLs ==="
+          # Wine may install to $prefix/lib/wine/i386-windows (no arch subdir) or
+          # directly under $prefix/x86_64/lib/wine/i386-windows/. Check both.
+          I386_TOP=/tmp/wine-x64-out/lib/wine/i386-windows
+          I386_X64=/tmp/wine-x64-out/x86_64/lib/wine/i386-windows
+          if [[ -d "$I386_X64" ]]; then
+            echo "i386-windows already in x86_64 subtree: $(ls "$I386_X64" | wc -l) files"
+          elif [[ -d "$I386_TOP" ]]; then
+            echo "Copying $(ls "$I386_TOP" | wc -l) i386-windows DLLs into x86_64 subtree..."
+            mkdir -p "$I386_X64"
+            cp -a "$I386_TOP/." "$I386_X64/"
+            echo "Done: $(ls "$I386_X64" | wc -l) files in $I386_X64"
+          else
+            echo "ERROR: i386-windows DLLs not found after install. Full tree:"
+            find /tmp/wine-x64-out -name "*.dll" -path "*/i386*" 2>/dev/null | head -5 || echo "(none)"
+            find /tmp/wine-x64-out -maxdepth 5 -type d 2>/dev/null | head -20
+            exit 1
+          fi
+
       - name: Package as GameHub container
         run: |
           # Wine installs to $prefix/x86_64/ (multiarch layout).
@@ -405,13 +466,16 @@ jobs:
           ls "$X64_SRC/lib/wine/x86_64-unix/" 2>/dev/null | grep "\.so$" | head -10
           echo "=== windows PE DLLs (sample) ==="
           ls "$X64_SRC/lib/wine/x86_64-windows/" 2>/dev/null | grep "\.dll$" | head -10 || echo "missing"
+          echo "=== i386-windows PE DLLs ==="
+          ls "$X64_SRC/lib/wine/i386-windows/" 2>/dev/null | wc -l || echo "0 (missing!)"
 
           chmod +x scripts/package_container.sh
           ./scripts/package_container.sh x64 "$X64_SRC" wine_${WINE_VERSION}
 
       - name: Generate proper Wine prefix (sub_data) from wine_10.0 template
         # wine_10.0's sub_data has registry hives + symlinks needed for container init.
-        # We reuse it, removing any symlinks to i386-windows (Wine 11 has no 32-bit).
+        # We reuse it as-is — Wine 11.0 now ships i386-windows DLLs so syswow64
+        # symlinks pointing to i386-windows remain valid.
         run: |
           WINE_VER="${WINE_VERSION}"
           MAIN_MD5=$(md5sum "wine_${WINE_VER}.tar.zst" | cut -d' ' -f1)
@@ -420,19 +484,10 @@ jobs:
           echo "Downloading wine_10.0 prefix template..."
           wget -q -O /tmp/wine10_sub.tzst "$WINE10_SUB_URL"
 
-          echo "Processing prefix — removing i386-windows symlinks..."
+          echo "Processing prefix — keeping i386-windows symlinks (WoW64 DLLs now present)..."
           mkdir -p /tmp/prefix_work
           cd /tmp/prefix_work
           zstd -d -c /tmp/wine10_sub.tzst | tar -x
-
-          # Remove symlinks targeting i386-windows (Wine 11 has no 32-bit DLLs)
-          find . -type l | while IFS= read -r link; do
-            target=$(readlink "$link")
-            if echo "$target" | grep -q "i386-windows"; then
-              echo "  Removing: $link -> $target"
-              rm "$link"
-            fi
-          done
 
           echo "Repacking prefix..."
           tar --use-compress-program="zstd -19 -T0" -cf "/tmp/${OLD_SUB}" wine/
