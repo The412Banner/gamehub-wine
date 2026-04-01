@@ -396,9 +396,11 @@ jobs:
         # --with-wine64 hooks into the already-built x64 tree; only PE DLLs are built
         # (no unix-side for i386 in new-wow64). Working containers (wine 9.13) have 721
         # i386-windows DLLs — without them wineboot exits immediately after X11 window.
+        # CC=gcc overrides the inherited NDK clang (CC env var from x64 job steps) —
+        # the i386 build has no unix-side to cross-compile, so we use native Linux gcc.
         run: |
           mkdir build-i386 && cd build-i386
-          ../wine-${WINE_VERSION}/configure \
+          CC=gcc CXX=g++ ../wine-${WINE_VERSION}/configure \
             --with-wine64=../build-x64 \
             --disable-tests \
             --prefix=/tmp/wine-x64-out \
