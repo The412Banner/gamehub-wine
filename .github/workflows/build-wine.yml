@@ -402,16 +402,18 @@ jobs:
         # stubs, not real tools. Symlink host tools into build-x64/tools/ so that
         # --with-wine64=../build-x64 can find widl/winebuild/wrc.
         run: |
-          # --with-wine64=../build-x64 checks for tools/winebuild/winebuild etc.
-          # Our x64 build used --with-wine-tools=/opt/wine-host so the real tools
-          # live there, not in build-x64/tools/. Symlink the whole tools dir.
+          # --with-wine64=../build-x64 checks for tools/winebuild/winebuild and
+          # tools/widl/widl as actual executables.
+          # make __tooldeps__ only built .o files in these subdirs, not final binaries.
+          # Build them explicitly from the host artifact (native Linux gcc).
+          echo "Building widl and winebuild executables in host tools..."
+          make -C /opt/wine-host tools/widl/widl tools/winebuild/winebuild 2>&1 | tail -5
+          echo "widl: $(ls -la /opt/wine-host/tools/widl/widl 2>/dev/null || echo 'MISSING')"
+          echo "winebuild: $(ls -la /opt/wine-host/tools/winebuild/winebuild 2>/dev/null || echo 'MISSING')"
+
+          # Symlink the whole tools dir so --with-wine64=../build-x64 can find them
           rm -rf build-x64/tools
           ln -sf /opt/wine-host/tools build-x64/tools
-          echo "build-x64/tools -> $(readlink build-x64/tools)"
-          echo "tools contents: $(ls build-x64/tools/ | tr '\n' ' ')"
-          # Verify widl and winebuild are reachable
-          ls build-x64/tools/widl 2>/dev/null && echo "widl: found" || echo "widl: MISSING"
-          ls build-x64/tools/winebuild 2>/dev/null && echo "winebuild: found" || echo "winebuild: MISSING"
 
           mkdir build-i386 && cd build-i386
           CC=gcc CXX=g++ ../wine-${WINE_VERSION}/configure \
