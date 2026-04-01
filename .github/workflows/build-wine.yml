@@ -397,9 +397,22 @@ jobs:
         # --with-wine64 hooks into the already-built x64 tree; only PE DLLs are built
         # (no unix-side for i386 in new-wow64). Working containers (wine 9.13) have 721
         # i386-windows DLLs — without them wineboot exits immediately after X11 window.
-        # CC=gcc overrides the inherited NDK clang (CC env var from x64 job steps) —
-        # the i386 build has no unix-side to cross-compile, so we use native Linux gcc.
+        # CC=gcc overrides the inherited NDK clang — no unix-side cross-compile needed.
+        # The x64 build used --with-wine-tools=/opt/wine-host so build-x64/tools/ has
+        # stubs, not real tools. Symlink host tools into build-x64/tools/ so that
+        # --with-wine64=../build-x64 can find widl/winebuild/wrc.
         run: |
+          # Ensure build-x64/tools/ has the real tool binaries
+          mkdir -p build-x64/tools
+          for tool_dir in /opt/wine-host/tools/*/; do
+            tool_name=$(basename "$tool_dir")
+            if [[ ! -e "build-x64/tools/$tool_name" ]]; then
+              ln -sf "$tool_dir" "build-x64/tools/$tool_name"
+            fi
+          done
+          echo "build-x64/tools contents:"
+          ls build-x64/tools/ 2>/dev/null || echo "(empty)"
+
           mkdir build-i386 && cd build-i386
           CC=gcc CXX=g++ ../wine-${WINE_VERSION}/configure \
             --with-wine64=../build-x64 \
