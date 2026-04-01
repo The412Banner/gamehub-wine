@@ -420,6 +420,21 @@ jobs:
             --with-wine64=../build-x64 \
             --disable-tests \
             --prefix=/tmp/wine-x64-out \
+            --without-x \
+            --without-wayland \
+            --without-dbus \
+            --without-pulse \
+            --without-alsa \
+            --without-cups \
+            --without-sane \
+            --without-v4l2 \
+            --without-opencl \
+            --without-pcap \
+            --without-netapi \
+            --without-krb5 \
+            --without-capi \
+            --without-gnutls \
+            --without-unwind \
             CROSSCC="i686-w64-mingw32-gcc" \
             CROSSCXX="i686-w64-mingw32-g++" \
             CROSSCFLAGS="-Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion"
