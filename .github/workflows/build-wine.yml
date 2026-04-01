@@ -435,6 +435,7 @@ jobs:
             --without-capi \
             --without-gnutls \
             --without-unwind \
+            --without-freetype \
             CROSSCC="i686-w64-mingw32-gcc" \
             CROSSCXX="i686-w64-mingw32-g++" \
             CROSSCFLAGS="-Wno-implicit-function-declaration -Wno-incompatible-function-pointer-types -Wno-int-conversion"
