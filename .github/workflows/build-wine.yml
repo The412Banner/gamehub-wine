@@ -94,9 +94,16 @@ jobs:
         # This avoids reusing an old Wine 10.0 prefix template which causes Wine
         # to attempt a registry migration on first launch → crash (desktop flickers).
         # --without-x uses the null display driver — no Xvfb needed.
+        # Note: Wine source may not exist if cache hit skipped Download step — re-fetch.
         run: |
           sudo apt-get install -y --no-install-recommends \
             libgnutls28-dev libunwind-dev libfreetype-dev 2>/dev/null
+          if [[ ! -d "wine-${WINE_VERSION}" ]]; then
+            MINOR="${WINE_VERSION#*.}"
+            SRCDIR=$([[ "$MINOR" == "0" ]] && echo "${WINE_VERSION%%.*}.0" || echo "${WINE_VERSION%%.*}.x")
+            wget -q "https://dl.winehq.org/wine/source/${SRCDIR}/wine-${WINE_VERSION}.tar.xz"
+            tar -xf "wine-${WINE_VERSION}.tar.xz"
+          fi
           mkdir build-native-prefix && cd build-native-prefix
           ../wine-${WINE_VERSION}/configure \
             --enable-win64 \
