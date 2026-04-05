@@ -88,13 +88,86 @@ jobs:
           path: build-host
           retention-days: 1
 
+      - name: Build native Wine for prefix generation
+        # Build a full headless native Linux Wine (no X/Vulkan) so we can run
+        # wineboot --init to produce a clean Wine ${WINE_VERSION} registry prefix.
+        # This avoids reusing an old Wine 10.0 prefix template which causes Wine
+        # to attempt a registry migration on first launch → crash (desktop flickers).
+        # --without-x uses the null display driver — no Xvfb needed.
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            libgnutls28-dev libunwind-dev libfreetype-dev 2>/dev/null
+          mkdir build-native-prefix && cd build-native-prefix
+          ../wine-${WINE_VERSION}/configure \
+            --enable-win64 \
+            --without-x \
+            --without-wayland \
+            --without-opengl \
+            --without-vulkan \
+            --without-opencl \
+            --without-dbus \
+            --without-pulse \
+            --without-alsa \
+            --without-oss \
+            --without-gstreamer \
+            --without-gphoto \
+            --without-v4l2 \
+            --without-netapi \
+            --without-pcap \
+            --without-sane \
+            --without-cups \
+            --without-krb5 \
+            --without-capi \
+            --disable-tests \
+            --prefix=/tmp/native-wine
+          make -j$(nproc)
+          make install
+
+      - name: Generate fresh Wine prefix via wineboot
+        run: |
+          export WINEPREFIX=/tmp/wine-fresh-prefix
+          export WINEARCH=win64
+          export WINEDEBUG=-all
+          unset DISPLAY
+          # Run wineboot with null display driver (--without-x build)
+          /tmp/native-wine/bin/wine64 wineboot --init 2>/dev/null || true
+          # Give wineserver time to finish registry writes then shut down
+          /tmp/native-wine/bin/wineserver --wait 2>/dev/null || true
+          sleep 2
+
+          echo "=== Prefix contents ==="
+          ls -la "$WINEPREFIX/" || echo "WINEPREFIX empty — prefix generation failed"
+
+          if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
+            echo "ERROR: system.reg not found — prefix generation failed"
+            exit 1
+          fi
+
+          echo "system.reg size: $(stat -c%s "$WINEPREFIX/system.reg") bytes"
+          echo "user.reg size:   $(stat -c%s "$WINEPREFIX/user.reg" 2>/dev/null || echo 'missing') bytes"
+
+          # Pack as wine/ directory (matching expected sub_data layout)
+          mkdir -p /tmp/prefix-stage/wine
+          cp -a "${WINEPREFIX}/." /tmp/prefix-stage/wine/
+          cd /tmp/prefix-stage
+          # Name doesn't matter here — x64/arm64x jobs will rename to their own MD5
+          tar --use-compress-program="zstd -19 -T0" -cf /tmp/wine-fresh-prefix.tzst wine/
+          echo "Packed prefix: $(stat -c%s /tmp/wine-fresh-prefix.tzst) bytes"
+
+      - name: Upload fresh prefix artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wine-fresh-prefix
+          path: /tmp/wine-fresh-prefix.tzst
+          retention-days: 1
+
   # ──────────────────────────────────────────────────────────────────────────
   # Build X64: x86_64-linux-android (runs via Box64/FEX on device)
   # Uses X11 backend (winex11.so) — Box64 wraps libX11 from imagefs at runtime
   # ──────────────────────────────────────────────────────────────────────────
   build-x64:
     runs-on: ubuntu-24.04
-    needs: build-host-tools
+    needs: [build-host-tools]
     if: inputs.framework == 'x64' || inputs.framework == 'both'
 
     steps:
@@ -128,6 +201,12 @@ jobs:
       - name: Fix host tools permissions
         # Artifacts don't preserve execute bits — restore them
         run: chmod -R +x /opt/wine-host/tools
+
+      - name: Download fresh Wine prefix artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wine-fresh-prefix
+          path: /tmp/fresh-prefix-artifact
 
       - name: Set up Android NDK toolchain (x86_64)
         run: |
@@ -510,44 +589,30 @@ jobs:
           chmod +x scripts/package_container.sh
           ./scripts/package_container.sh x64 "$X64_SRC" wine_${WINE_VERSION}
 
-      - name: Generate proper Wine prefix (sub_data) from wine_10.0 template
-        # wine_10.0's sub_data has registry hives + symlinks needed for container init.
-        # We reuse it as-is — Wine 11.0 now ships i386-windows DLLs so syswow64
-        # symlinks pointing to i386-windows remain valid.
+      - name: Package fresh prefix as sub_data (x64)
+        # Rename the shared fresh prefix artifact to this container's MD5-named file.
+        # Using a Wine ${WINE_VERSION} generated prefix avoids the registry migration
+        # crash that happens when Wine 11.x starts with a stale Wine 10.0 prefix.
         run: |
           WINE_VER="${WINE_VERSION}"
           MAIN_MD5=$(md5sum "wine_${WINE_VER}.tar.zst" | cut -d' ' -f1)
-          OLD_SUB="${MAIN_MD5}.tzst"
+          SUB_NAME="${MAIN_MD5}.tzst"
 
-          echo "Downloading wine_10.0 prefix template..."
-          wget -q -O /tmp/wine10_sub.tzst "$WINE10_SUB_URL"
+          cp /tmp/fresh-prefix-artifact/wine-fresh-prefix.tzst "./${SUB_NAME}"
 
-          echo "Processing prefix — keeping i386-windows symlinks (WoW64 DLLs now present)..."
-          mkdir -p /tmp/prefix_work
-          cd /tmp/prefix_work
-          zstd -d -c /tmp/wine10_sub.tzst | tar -x
+          NEW_SUB_MD5=$(md5sum "./${SUB_NAME}" | cut -d' ' -f1)
+          NEW_SUB_SIZE=$(stat -c%s "./${SUB_NAME}")
+          echo "sub_data: ${SUB_NAME} (${NEW_SUB_SIZE} bytes, md5=${NEW_SUB_MD5})"
 
-          echo "Repacking prefix..."
-          tar --use-compress-program="zstd -19 -T0" -cf "/tmp/${OLD_SUB}" wine/
-          cd -
-          mv "/tmp/${OLD_SUB}" "./${OLD_SUB}"
-
-          NEW_SUB_MD5=$(md5sum "./${OLD_SUB}" | cut -d' ' -f1)
-          NEW_SUB_SIZE=$(stat -c%s "./${OLD_SUB}")
-          echo "New sub_data: ${OLD_SUB} (${NEW_SUB_SIZE} bytes, md5=${NEW_SUB_MD5})"
-
-          # Update containers_entry JSON with correct sub_data info
           python3 << PYEOF
-          import json, glob
-
-          import re as _re
+          import json, glob, re as _re
           for entry_file in glob.glob('./containers_entry_wine_*.json'):
               if _re.search(r'arm64x', entry_file):
-                  continue  # skip arm64x entry
+                  continue
               with open(entry_file) as f:
                   entry = json.load(f)
-              entry['sub_data']['sub_file_name'] = '${OLD_SUB}'
-              entry['sub_data']['sub_download_url'] = 'https://github.com/The412Banner/gamehub-wine/releases/download/Containers/${OLD_SUB}'
+              entry['sub_data']['sub_file_name'] = '${SUB_NAME}'
+              entry['sub_data']['sub_download_url'] = 'https://github.com/The412Banner/gamehub-wine/releases/download/Containers/${SUB_NAME}'
               entry['sub_data']['sub_file_md5'] = '${NEW_SUB_MD5}'
               with open(entry_file, 'w') as f:
                   json.dump(entry, f, indent=2)
@@ -574,7 +639,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   build-arm64x:
     runs-on: ubuntu-24.04
-    needs: build-host-tools
+    needs: [build-host-tools]
     if: inputs.framework == 'arm64x' || inputs.framework == 'both'
 
     steps:
@@ -614,6 +679,12 @@ jobs:
       - name: Fix host tools permissions
         # Artifacts don't preserve execute bits — restore them
         run: chmod -R +x /opt/wine-host/tools
+
+      - name: Download fresh Wine prefix artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wine-fresh-prefix
+          path: /tmp/fresh-prefix-artifact
 
       - name: Set up Android NDK toolchain (aarch64)
         run: |
@@ -891,47 +962,28 @@ jobs:
           chmod +x scripts/package_container.sh
           ./scripts/package_container.sh arm64x "$ARM_SRC" wine_${WINE_VERSION}_arm64x
 
-      - name: Generate proper Wine prefix (sub_data) from wine_10.0 template
+      - name: Package fresh prefix as sub_data (arm64x)
+        # Same fresh Wine ${WINE_VERSION} prefix artifact as x64 — registry format is
+        # architecture-independent. arm64x has no 32-bit DLLs so the prefix
+        # generated by the 64-bit native build is correct as-is.
         run: |
           WINE_VER="${WINE_VERSION}"
           MAIN_MD5=$(md5sum "wine_${WINE_VER}_arm64x.tar.zst" | cut -d' ' -f1)
-          OLD_SUB="${MAIN_MD5}.tzst"
+          SUB_NAME="${MAIN_MD5}.tzst"
 
-          echo "Downloading wine_10.0 prefix template..."
-          wget -q -O /tmp/wine10_sub.tzst "$WINE10_SUB_URL"
+          cp /tmp/fresh-prefix-artifact/wine-fresh-prefix.tzst "./${SUB_NAME}"
 
-          echo "Processing prefix — removing i386-windows symlinks..."
-          mkdir -p /tmp/prefix_work_arm64
-          cd /tmp/prefix_work_arm64
-          zstd -d -c /tmp/wine10_sub.tzst | tar -x
+          NEW_SUB_MD5=$(md5sum "./${SUB_NAME}" | cut -d' ' -f1)
+          NEW_SUB_SIZE=$(stat -c%s "./${SUB_NAME}")
+          echo "sub_data: ${SUB_NAME} (${NEW_SUB_SIZE} bytes, md5=${NEW_SUB_MD5})"
 
-          # Remove symlinks targeting i386-windows (Wine 11 has no 32-bit DLLs)
-          find . -type l | while IFS= read -r link; do
-            target=$(readlink "$link")
-            if echo "$target" | grep -q "i386-windows"; then
-              echo "  Removing: $link -> $target"
-              rm "$link"
-            fi
-          done
-
-          echo "Repacking prefix..."
-          tar --use-compress-program="zstd -19 -T0" -cf "/tmp/${OLD_SUB}" wine/
-          cd -
-          mv "/tmp/${OLD_SUB}" "./${OLD_SUB}"
-
-          NEW_SUB_MD5=$(md5sum "./${OLD_SUB}" | cut -d' ' -f1)
-          NEW_SUB_SIZE=$(stat -c%s "./${OLD_SUB}")
-          echo "New sub_data: ${OLD_SUB} (${NEW_SUB_SIZE} bytes, md5=${NEW_SUB_MD5})"
-
-          # Update containers_entry JSON
           python3 << PYEOF
           import json, glob
-
           for entry_file in glob.glob('./containers_entry_wine_*_arm64x.json'):
               with open(entry_file) as f:
                   entry = json.load(f)
-              entry['sub_data']['sub_file_name'] = '${OLD_SUB}'
-              entry['sub_data']['sub_download_url'] = 'https://github.com/The412Banner/gamehub-wine/releases/download/Containers/${OLD_SUB}'
+              entry['sub_data']['sub_file_name'] = '${SUB_NAME}'
+              entry['sub_data']['sub_download_url'] = 'https://github.com/The412Banner/gamehub-wine/releases/download/Containers/${SUB_NAME}'
               entry['sub_data']['sub_file_md5'] = '${NEW_SUB_MD5}'
               with open(entry_file, 'w') as f:
                   json.dump(entry, f, indent=2)
