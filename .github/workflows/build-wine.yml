@@ -59,7 +59,9 @@ jobs:
       - name: Download Wine source
         if: steps.cache-tools.outputs.cache-hit != 'true'
         run: |
-          wget -q "https://dl.winehq.org/wine/source/${WINE_VERSION%%.*}.0/wine-${WINE_VERSION}.tar.xz"
+          MINOR="${WINE_VERSION#*.}"
+          SRCDIR=$([[ "$MINOR" == "0" ]] && echo "${WINE_VERSION%%.*}.0" || echo "${WINE_VERSION%%.*}.x")
+          wget -q "https://dl.winehq.org/wine/source/${SRCDIR}/wine-${WINE_VERSION}.tar.xz"
           tar -xf "wine-${WINE_VERSION}.tar.xz"
 
       - name: Build host Wine tools
@@ -112,7 +114,9 @@ jobs:
 
       - name: Download Wine source
         run: |
-          wget -q "https://dl.winehq.org/wine/source/${WINE_VERSION%%.*}.0/wine-${WINE_VERSION}.tar.xz"
+          MINOR="${WINE_VERSION#*.}"
+          SRCDIR=$([[ "$MINOR" == "0" ]] && echo "${WINE_VERSION%%.*}.0" || echo "${WINE_VERSION%%.*}.x")
+          wget -q "https://dl.winehq.org/wine/source/${SRCDIR}/wine-${WINE_VERSION}.tar.xz"
           tar -xf "wine-${WINE_VERSION}.tar.xz"
 
       - name: Download host tools artifact
@@ -596,7 +600,9 @@ jobs:
 
       - name: Download Wine source
         run: |
-          wget -q "https://dl.winehq.org/wine/source/${WINE_VERSION%%.*}.0/wine-${WINE_VERSION}.tar.xz"
+          MINOR="${WINE_VERSION#*.}"
+          SRCDIR=$([[ "$MINOR" == "0" ]] && echo "${WINE_VERSION%%.*}.0" || echo "${WINE_VERSION%%.*}.x")
+          wget -q "https://dl.winehq.org/wine/source/${SRCDIR}/wine-${WINE_VERSION}.tar.xz"
           tar -xf "wine-${WINE_VERSION}.tar.xz"
 
       - name: Download host tools artifact
