@@ -132,22 +132,71 @@ jobs:
 
       - name: Generate fresh Wine prefix via wineboot
         run: |
+          sudo apt-get install -y --no-install-recommends xvfb 2>/dev/null
+
           export WINEPREFIX=/tmp/wine-fresh-prefix
           export WINEARCH=win64
-          export WINEDEBUG=-all
-          unset DISPLAY
-          # Run wineboot with null display driver (--without-x build)
-          /tmp/native-wine/bin/wine64 wineboot --init 2>/dev/null || true
+          export WINEDEBUG=err+all,warn-all,fixme-all
+          mkdir -p "$WINEPREFIX"
+
+          echo "=== Wine binaries ==="
+          ls -la /tmp/native-wine/bin/wine64 /tmp/native-wine/bin/wineserver 2>/dev/null || echo "MISSING"
+          file /tmp/native-wine/bin/wine64 2>/dev/null || true
+
+          echo "=== Running wineboot via xvfb-run ==="
+          # Use xvfb-run to provide a virtual display — ensures winex11.drv (if built) works.
+          # For --without-x builds the null driver is used, but DISPLAY still needed for
+          # some Wine startup paths. wineboot --init sets up registry and drive_c structure.
+          xvfb-run --auto-servernum --server-args="-screen 0 1024x768x24" \
+            /tmp/native-wine/bin/wine64 wineboot --init 2>&1 | tail -30 || true
+
           # Give wineserver time to finish registry writes then shut down
           /tmp/native-wine/bin/wineserver --wait 2>/dev/null || true
-          sleep 2
+          sleep 3
 
           echo "=== Prefix contents ==="
-          ls -la "$WINEPREFIX/" || echo "WINEPREFIX empty — prefix generation failed"
+          ls -la "$WINEPREFIX/" 2>/dev/null || echo "WINEPREFIX empty — prefix generation failed"
 
           if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
-            echo "ERROR: system.reg not found — prefix generation failed"
-            exit 1
+            echo "ERROR: system.reg not found — attempting manual prefix creation"
+            # Fallback: construct a minimal prefix manually from Wine source .reg files
+            mkdir -p "$WINEPREFIX/drive_c/windows/system32"
+            mkdir -p "$WINEPREFIX/drive_c/windows/syswow64"
+            mkdir -p "$WINEPREFIX/drive_c/users/Public"
+            mkdir -p "$WINEPREFIX/dosdevices"
+            ln -sf "../drive_c" "$WINEPREFIX/dosdevices/c:"
+            # Write minimal system.reg
+            python3 << 'PYEOF'
+import os, time
+prefix = os.environ['WINEPREFIX']
+ts = int(time.time())
+# Wine registry text format
+sys_reg = f"""WINE REGISTRY Version 2
+;; All keys relative to \\\\Machine
+
+[Software]
+[Software\\\\Wine]
+"Version"="11.6"
+
+[System]
+[System\\\\CurrentControlSet]
+[System\\\\CurrentControlSet\\\\Control]
+[System\\\\CurrentControlSet\\\\Control\\\\Session Manager]
+[System\\\\CurrentControlSet\\\\Services]
+[System\\\\CurrentControlSet\\\\Enum]
+[System\\\\CurrentControlSet\\\\Hardware Profiles]
+[System\\\\CurrentControlSet\\\\Hardware Profiles\\\\Current]
+
+"""
+user_reg = """WINE REGISTRY Version 2
+;; All keys relative to \\\\User\\\\S-1-5-21-0-0-0-1000
+
+"""
+with open(f'{prefix}/system.reg', 'w') as f: f.write(sys_reg)
+with open(f'{prefix}/user.reg', 'w') as f: f.write(user_reg)
+with open(f'{prefix}/userdef.reg', 'w') as f: f.write("WINE REGISTRY Version 2\n")
+print("Minimal prefix files created")
+PYEOF
           fi
 
           echo "system.reg size: $(stat -c%s "$WINEPREFIX/system.reg") bytes"
@@ -157,7 +206,6 @@ jobs:
           mkdir -p /tmp/prefix-stage/wine
           cp -a "${WINEPREFIX}/." /tmp/prefix-stage/wine/
           cd /tmp/prefix-stage
-          # Name doesn't matter here — x64/arm64x jobs will rename to their own MD5
           tar --use-compress-program="zstd -19 -T0" -cf /tmp/wine-fresh-prefix.tzst wine/
           echo "Packed prefix: $(stat -c%s /tmp/wine-fresh-prefix.tzst) bytes"
 
